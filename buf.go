@@ -117,7 +117,7 @@ func generate_header(inner_bytes []byte) (h header) {
 		*/
 	}
 	// Pad the header to its defined length of 512 or 1024 Bytes
-	padlen := headlen - len(buf.Bytes())
+	padlen := headlen - buf.Len()
 	buf.Write(randbytes(padlen))
 	h.bytes = buf.Bytes()
 	return
@@ -189,7 +189,7 @@ func generate_final() (h final_hop) {
 	digest.Write(buf.Bytes())
 	h.digest = digest.Sum(nil)
 	buf.Write(h.digest)
-	padlen := inner_header_bytes - len(buf.Bytes())
+	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
 	h.bytes = buf.Bytes()
 	return
@@ -217,7 +217,7 @@ func generate_intermediate(nexthop string) (h intermediate_hop) {
 	digest.Write(buf.Bytes())
 	h.digest = digest.Sum(nil)
 	buf.Write(h.digest)
-	padlen := inner_header_bytes - len(buf.Bytes())
+	padlen := inner_header_bytes - buf.Len()
 	buf.Write([]byte(strings.Repeat("\x00", padlen)))
 	h.bytes = buf.Bytes()
 	return
@@ -284,32 +284,33 @@ func payload_encode(text string) (payload bytes.Buffer) {
 }
 
 // cutmarks encodes a mixmsg into a Mixmaster formatted email payload
-func cutmarks(mixmsg *bytes.Buffer) (mixtext string) {
+func cutmarks(mixmsg []byte) (mixtext string) {
 	mixtext += "::\n"
-	mixtext += "Remailer-Type: GoMix 0.1\n\n"
+	mixtext += "Remailer-Type: Mixmaster 0.1\n\n"
 	mixtext += "-----BEGIN REMAILER MESSAGE-----\n"
-	mixtext += strconv.Itoa(len(mixmsg.Bytes())) + "\n"
+	mixtext += strconv.Itoa(len(mixmsg)) + "\n"
 	digest := md5.New()
-	digest.Write(mixmsg.Bytes())
+	digest.Write(mixmsg)
 	mixtext += b64enc(digest.Sum(nil)) + "\n"
-	mixtext += b64enc(mixmsg.Bytes()) + "\n"
+	mixtext += b64enc(mixmsg) + "\n"
 	mixtext +="-----END REMAILER MESSAGE-----"
 	return
 }
 
 func main() {
-	message := new(bytes.Buffer)
-	final := generate_final()
-	header := generate_header(final.bytes)
-	message.Write(header.bytes)
-	message.Write(randbytes(19 * 512))
 	text := "##\n"
 	text += "From: nobody@testing.invalid\n"
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
-	payload := payload_encode(text)
-	message.Write(encrypt_des_cbc(payload.Bytes(), final.deskey, final.iv))
-
+	headers := new(bytes.Buffer)
+	final := generate_final()
+	header := generate_header(final.bytes)
+	headers.Write(header.bytes)
+	headers.Write(randbytes(19 * 512))
+	p := payload_encode(text)
+	payload := encrypt_des_cbc(p.Bytes(), final.deskey, final.iv)
+	message := make([]byte, 20480)
+	message = append(headers.Bytes(), payload...)
 	fmt.Println(cutmarks(message))
 }
