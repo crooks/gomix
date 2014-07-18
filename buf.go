@@ -297,20 +297,68 @@ func cutmarks(mixmsg []byte) (mixtext string) {
 	return
 }
 
+func encrypt_headers(headers, key, ivs []byte) []byte {
+	if len(headers) % 512 != 0 {
+		panic("Header is not a multiple of 512 Bytes")
+	}
+	if len(ivs) != 152 {
+		panic("ivs should always be 19 * 8 Bytes long")
+	}
+	var iv []byte
+	enc := make([]byte, 512) // Encrypted header block
+	var s int // Start position in header block
+	var e int // End position in header block
+	header_count := len(headers) / 512
+	for h := 0; h < header_count; h++ {
+		iv = ivs[h * 8: (h + 1) * 8]
+		//header = headers[h * 512:(h + 1) * 512]
+		//encrypted_header = encrypt_des_cbc(header, key, iv)
+		s = h * 512
+		e = (h + 1) * 512
+		enc = encrypt_des_cbc(headers[s:e], key, iv)
+		copy(headers[s:e], enc)
+	}
+	return headers
+}
+
+
 func main() {
 	text := "##\n"
 	text += "From: nobody@testing.invalid\n"
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
-	headers := new(bytes.Buffer)
+	headers := make([]byte, 512, 10240)
+	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
 	header := generate_header(final.bytes)
-	headers.Write(header.bytes)
-	headers.Write(randbytes(19 * 512))
+	// Populate the top 512 Bytes of headers
+	copy(headers[:512], header.bytes)
+	// Add the clunky old Mixmaster fields to the payload and then encrypt it
 	p := payload_encode(text)
 	payload := encrypt_des_cbc(p.Bytes(), final.deskey, final.iv)
+	// Final hop processing is now complete
+	for i := 0; i < 2; i++ {
+		inter := generate_intermediate("banana@mixmaster.mixmin.net")
+		header = generate_header(inter.bytes)
+		/* At this point, the new header hasn't been inserted so the entire header
+		chain comprises old headers that need to be encrypted with the the key and
+		ivs from the new header. */
+		copy(old_heads, encrypt_headers(headers, inter.deskey, inter.ivs))
+		// Extend the headers slice by 512 Bytes
+		headers = headers[0:len(headers) + 512]
+		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
+		copy(headers[512:], old_heads) // Append encrypted old headers
+		payload = encrypt_des_cbc(payload, inter.deskey, inter.ivs[144:])
+		fmt.Println(len(headers))
+	}
+	// Record current header length before extending and padding
+	headlen_before_pad := len(headers)
+	headers = headers[0:10240]
+	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
 	message := make([]byte, 20480)
-	message = append(headers.Bytes(), payload...)
+	copy(message[:10240], headers)
+	copy(message[10240:], payload)
+	//fmt.Println(len(message))
 	fmt.Println(cutmarks(message))
 }
