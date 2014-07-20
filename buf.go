@@ -272,14 +272,14 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
 func payload_encode(text string) (payload bytes.Buffer) {
 	// Add 6 to text length to accommodate 4 Byte payload_length plus 1 Byte
 	// each for Num Dests and Num Headers.
-	payload_length := uint32(len(text) + 6)
+	payload_length := uint32(len(text) + 2)
 	lenbytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(lenbytes, payload_length)
 	payload.Write(lenbytes)
 	payload.WriteByte(0) // Number of dests
 	payload.WriteByte(0) // Nymber of header lines
 	payload.Write([]byte(text))
-	payload.Write(randbytes(10240 - len(payload.Bytes())))
+	payload.Write(randbytes(10240 - payload.Len()))
 	return
 }
 
@@ -297,7 +297,7 @@ func cutmarks(mixmsg []byte) (mixtext string) {
 	return
 }
 
-func encrypt_headers(headers, key, ivs []byte) []byte {
+func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	if len(headers) % 512 != 0 {
 		panic("Header is not a multiple of 512 Bytes")
 	}
@@ -305,20 +305,18 @@ func encrypt_headers(headers, key, ivs []byte) []byte {
 		panic("ivs should always be 19 * 8 Bytes long")
 	}
 	var iv []byte
-	enc := make([]byte, 512) // Encrypted header block
 	var s int // Start position in header block
 	var e int // End position in header block
 	header_count := len(headers) / 512
+	buf := new(bytes.Buffer)
 	for h := 0; h < header_count; h++ {
 		iv = ivs[h * 8: (h + 1) * 8]
-		//header = headers[h * 512:(h + 1) * 512]
-		//encrypted_header = encrypt_des_cbc(header, key, iv)
 		s = h * 512
 		e = (h + 1) * 512
-		enc = encrypt_des_cbc(headers[s:e], key, iv)
-		copy(headers[s:e], enc)
+		buf.Write(encrypt_des_cbc(headers[s:e], key, iv))
 	}
-	return headers
+	encrypted = buf.Bytes()
+	return
 }
 
 
@@ -344,21 +342,19 @@ func main() {
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the the key and
 		ivs from the new header. */
-		copy(old_heads, encrypt_headers(headers, inter.deskey, inter.ivs))
+		old_heads = encrypt_headers(headers, inter.deskey, inter.ivs)
 		// Extend the headers slice by 512 Bytes
 		headers = headers[0:len(headers) + 512]
 		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
 		copy(headers[512:], old_heads) // Append encrypted old headers
 		payload = encrypt_des_cbc(payload, inter.deskey, inter.ivs[144:])
-		fmt.Println(len(headers))
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
 	headers = headers[0:10240]
 	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
 	message := make([]byte, 20480)
-	copy(message[:10240], headers)
-	copy(message[10240:], payload)
+	message = append(headers, payload...)
 	//fmt.Println(len(message))
 	fmt.Println(cutmarks(message))
 }
