@@ -3,19 +3,14 @@
 package main
 
 import (
-	"bufio"
-	"encoding/binary"
 	"crypto/rsa"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/sha256"
 	"encoding/pem"
-	"encoding/base64"
 	"os"
 	"io/ioutil"
-	"strconv"
 	"fmt"
-	"math/big"
 )
 
 func rsa_keygen(keylen int) {
@@ -104,73 +99,6 @@ func pubImport(filename string) (rsaPub *rsa.PublicKey) {
 	if !ok {
 		fmt.Println("Value returned from PKIX import was not an RSA Public Key")
 	}
-	return
-}
-
-// mix_import_pk takes a filename (usually pubring.mix) and a keyid.  It
-// returns the key as an rsa.PublicKey.
-func mix_import_pk(filename, keyid string) (pk rsa.PublicKey) {
-	var err error
-	f, err := os.Open(filename)
-	if err != nil {
-		panic(err)
-	}
-	scanner := bufio.NewScanner(f)
-	var line string //Each line within pubring.mix
-	var key_length int //Length of keyblock
-	var keyblock string //content of the requested keyblock
-	in_keyblock := false //True while inside a keyblock
-	in_requested_keyblock := false //True while inside the required keyblock
-	got_key_length := false
-	for scanner.Scan() {
-		line = scanner.Text()
-		if line == "-----Begin Mix Key-----" {
-			// Inside a keyblock
-			in_keyblock = true
-		} else if line == "-----End Mix Key-----" {
-			// Outside a keyblock
-			in_keyblock = false
-			in_requested_keyblock = false
-		} else if in_keyblock && line == keyid {
-			// Inside the requested keyblock
-			in_requested_keyblock = true
-		} else if in_requested_keyblock && ! got_key_length {
-			// First line in keyblock is the length identifer
-			key_length, err = strconv.Atoi(line)
-			if err != nil {
-				panic(err)
-			}
-			got_key_length = true
-		} else if in_requested_keyblock && got_key_length {
-			// Inside requested keyblock and building key itself
-			keyblock += line
-		}
-	}
-	f.Close()
-	data, err := base64.StdEncoding.DecodeString(keyblock)
-	if err != nil {
-		panic(err)
-	}
-	if len(data) != key_length {
-		panic("Incorrect key length")
-	}
-	keylen := binary.LittleEndian.Uint16(data[0:2])
-	// Cut between N and E: (1024 / 8) + 2 = 130
-	midpoint := (keylen / 8) + 2
-	pk.N = bytes_to_bigint(data[2:midpoint])
-	pk.E = bytes_to_int(data[midpoint:])
-	return
-}
-
-func bytes_to_bigint(b []byte) (acc *big.Int) {
-	acc = new(big.Int)
-	acc.SetBytes(b)
-	return
-}
-
-func bytes_to_int(b []byte) (i int) {
-	bigint := bytes_to_bigint(b)
-	i = int(bigint.Uint64())
 	return
 }
 

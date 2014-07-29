@@ -62,16 +62,14 @@ type header struct {
 }
 
 // generate_header creates the outer header.
-func generate_header(inner_bytes []byte) (h header) {
+func generate_header(inner_bytes []byte, pubkey pubring) (h header) {
 	/*
 	Headers are not populated in the same order as they're stored in the packet.
 	This is because the deskey has to be RSA encrypted early.
 	*/
-	keyid := "fafca5bea2ba5417298755e5d1287756"
-	h.keyid, _ = hex.DecodeString(keyid)
+	h.keyid, _ = hex.DecodeString(pubkey.keyid)
 	deskey := randbytes(24)
-	pk := mix_import_pk("pubring.mix", keyid)
-	h.enckey = rsa_encrypt(&pk, deskey)
+	h.enckey = rsa_encrypt(&pubkey.pk, deskey)
 	// The outer header is padded to 512 Bytes for 1024 bit keys and to
 	// 1024 Bytes for all other key sizes.
 	headlen := 1024
@@ -319,6 +317,13 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	return
 }
 
+// popstr takes a pointer to a string slice and pops the last element
+func popstr(s *[]string) (element string) {
+	slice := *s
+	element, slice = slice[len(slice) - 1], slice[:len(slice) - 1]
+	*s = slice
+	return
+}
 
 func main() {
 	text := "##\n"
@@ -326,19 +331,27 @@ func main() {
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
+	chain := []string{"mix@hermetix.org",
+										"remailer@dizum.com",
+										"banana@mixmaster.mixmin.net"}
+	hop := popstr(&chain)
+	pubring := import_pubring("pubring.mix")
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
-	header := generate_header(final.bytes)
+	header := generate_header(final.bytes, pubring[hop])
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
 	p := payload_encode(text)
 	payload := encrypt_des_cbc(p.Bytes(), final.deskey, final.iv)
-	// Final hop processing is now complete
-	for i := 0; i < 2; i++ {
-		inter := generate_intermediate("banana@mixmaster.mixmin.net")
-		header = generate_header(inter.bytes)
+	/* Final hop processing is now complete.  What follows is iterative
+	intermediate hop processing. */
+	for {
+		next_hop := hop
+		hop = popstr(&chain)
+		inter := generate_intermediate(next_hop)
+		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the the key and
 		ivs from the new header. */
@@ -348,6 +361,10 @@ func main() {
 		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
 		copy(headers[512:], old_heads) // Append encrypted old headers
 		payload = encrypt_des_cbc(payload, inter.deskey, inter.ivs[144:])
+		// Once the chain length is zero, the message is ready for padding
+		if len(chain) == 0 {
+			break
+		}
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
@@ -358,3 +375,4 @@ func main() {
 	//fmt.Println(len(message))
 	fmt.Println(cutmarks(message))
 }
+
