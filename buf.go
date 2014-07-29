@@ -325,15 +325,8 @@ func popstr(s *[]string) (element string) {
 	return
 }
 
-func main() {
-	text := "##\n"
-	text += "From: nobody@testing.invalid\n"
-	text += "To: steve@mixmin.net\n"
-	text += "Subject: Testing Gomix\n\n"
-	text += "This is a gomix test payload."
-	chain := []string{"mix@hermetix.org",
-										"remailer@dizum.com",
-										"banana@mixmaster.mixmin.net"}
+func mixmsg(text string, chainstr string) (message []byte) {
+	chain := strings.Split(chainstr, ",")
 	hop := popstr(&chain)
 	pubring := import_pubring("pubring.mix")
 	headers := make([]byte, 512, 10240)
@@ -353,8 +346,8 @@ func main() {
 		inter := generate_intermediate(next_hop)
 		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
-		chain comprises old headers that need to be encrypted with the the key and
-		ivs from the new header. */
+		chain comprises old headers that need to be encrypted with the key and ivs
+		from the new header. */
 		old_heads = encrypt_headers(headers, inter.deskey, inter.ivs)
 		// Extend the headers slice by 512 Bytes
 		headers = headers[0:len(headers) + 512]
@@ -370,9 +363,18 @@ func main() {
 	headlen_before_pad := len(headers)
 	headers = headers[0:10240]
 	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
-	message := make([]byte, 20480)
+	message = make([]byte, 20480)
 	message = append(headers, payload...)
-	//fmt.Println(len(message))
-	fmt.Println(cutmarks(message))
+	return
+}
+
+func main() {
+	text := "##\n"
+	text += "From: nobody@testing.invalid\n"
+	text += "To: steve@mixmin.net\n"
+	text += "Subject: Testing Gomix\n\n"
+	text += "This is a gomix test payload."
+	chain := "remailer@inwtx.net,remailer@dizum.com,banana@mixmaster.mixmin.net"
+	fmt.Println(cutmarks(mixmsg(text, chain)))
 }
 
