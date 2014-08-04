@@ -13,7 +13,7 @@ import (
 	"math/big"
 )
 
-type pubring struct {
+type pubinfo struct {
 	name string // Remailer Shortname
 	//address is the next field in pubring but we'll use this as the key
 	keyid string // 16 Byte Mixmaster KeyID
@@ -22,11 +22,11 @@ type pubring struct {
 	pk rsa.PublicKey // RSA Public Key
 }
 
-func import_pubring(filename string) (pub map[string]pubring,
+func import_pubring(filename string) (pub map[string]pubinfo,
 																		  xref map[string]string) {
 	var err error
 	// pub = map of pubring structs
-	pub = make(map[string]pubring)
+	pub = make(map[string]pubinfo)
 	// xref = map of shortnames to addresses
 	xref = make(map[string]string)
 	f, err := os.Open(filename)
@@ -38,7 +38,7 @@ func import_pubring(filename string) (pub map[string]pubring,
 	var num_elements int
 	var line string //Each line within pubring.mix
 	var addy string //Remailer's address (The map key)
-	var rem *pubring //A specific remailer's pubring struct
+	var rem *pubinfo //A specific remailer's pubring struct
 	var key_length int //The stated Public Key length
 	var keyblock string
 	var keydata []byte
@@ -61,7 +61,7 @@ func import_pubring(filename string) (pub map[string]pubring,
 			num_elements = len(elements)
 			// Elements of 5 or 7 indicate a remailer header line in pubring.mix
 			if (num_elements == 5 || num_elements == 7) {
-				rem = new(pubring)
+				rem = new(pubinfo)
 				rem.name = elements[0]
 				rem.keyid = elements[2]
 				rem.version = elements[3]

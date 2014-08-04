@@ -62,7 +62,7 @@ type header struct {
 }
 
 // generate_header creates the outer header.
-func generate_header(inner_bytes []byte, pubkey pubring) (h header) {
+func generate_header(inner_bytes []byte, pubkey pubinfo) (h header) {
 	/*
 	Headers are not populated in the same order as they're stored in the packet.
 	This is because the deskey has to be RSA encrypted early.
@@ -317,40 +317,15 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	return
 }
 
-// popstr takes a pointer to a string slice and pops the last element
-func popstr(s *[]string) (element string) {
-	slice := *s
-	element, slice = slice[len(slice) - 1], slice[:len(slice) - 1]
-	*s = slice
-	return
-}
-
-// hoptest validates each chain hop and returns the hop's email address
-func hoptest(chain *[]string, pub map[string]pubring, xref map[string]string) (hop string) {
-	hop = popstr(chain)
-	var exist bool // Test for key existence
-	/* Where an ampersand exists in the hop, it's assumed to be an email
-	address.  If not, it's assumed to be a shortname. */
-	if strings.Contains(hop, "@") {
-		_, exist = pub[hop]
-		if ! exist {
-			panic(hop + ": Remailer address not known")
-		}
-	} else {
-		_, exist = xref[hop]
-		if ! exist {
-			panic(hop + ": Remailer name not known")
-		}
-		// Change hop to its cross-reference by shortname
-		hop = xref[hop]
-	}
-	return
-}
-
 func mixmsg(text string, chainstr string) (message []byte) {
 	chain := strings.Split(chainstr, ",")
 	pubring, xref := import_pubring("pubring.mix")
-	hop := hoptest(&chain, pubring, xref)
+	addresses := make([]string, 0, len(pubring))
+	// Create a slice of addresses (for random node selection)
+	for a := range pubring {
+		addresses = append(addresses, a)
+	}
+	hop := hoptest(&chain, pubring, xref, addresses)
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
@@ -366,7 +341,7 @@ func mixmsg(text string, chainstr string) (message []byte) {
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
 		inter := generate_intermediate(hop)
-		hop = hoptest(&chain, pubring, xref)
+		hop = hoptest(&chain, pubring, xref, addresses)
 		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
@@ -397,8 +372,8 @@ func main() {
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
-	chain := "banana,remailer@inwtx.net,dizum,banana"
-	fmt.Println(cutmarks(mixmsg(text, chain)))
-	//fmt.Println(len(cutmarks(mixmsg(text, chain))))
+	chain := "banana,*,*,banana"
+	//fmt.Println(cutmarks(mixmsg(text, chain)))
+	fmt.Println(len(cutmarks(mixmsg(text, chain))))
 }
 
