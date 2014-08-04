@@ -325,10 +325,32 @@ func popstr(s *[]string) (element string) {
 	return
 }
 
+// hoptest tests for the existence of a given remailer shortname or address
+func hoptest(hop *string, pub map[string]pubring, xref map[string]string) {
+	h := *hop
+	var exist bool // Test for key existence
+	/* Where an ampersand exists in the hop, it's assumed to be an email
+	address.  If not, it's assumed to be a shortname. */
+	if strings.Contains(h, "@") {
+		_, exist = pub[h]
+		if ! exist {
+			panic(h + ": Remailer address not known")
+		}
+	} else {
+		_, exist = xref[h]
+		if ! exist {
+			panic(h + ": Remailer name not known")
+		}
+		h = xref[h]
+	}
+	*hop = h
+}
+
 func mixmsg(text string, chainstr string) (message []byte) {
 	chain := strings.Split(chainstr, ",")
+	pubring, xref := import_pubring("pubring.mix")
 	hop := popstr(&chain)
-	pubring := import_pubring("pubring.mix")
+	hoptest(&hop, pubring, xref)
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
@@ -341,9 +363,11 @@ func mixmsg(text string, chainstr string) (message []byte) {
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
 	for {
-		next_hop := hop
+		/* inter only requires the previous hop address so this step is performed
+		before popping the next hop from the chain. */
+		inter := generate_intermediate(hop)
 		hop = popstr(&chain)
-		inter := generate_intermediate(next_hop)
+		hoptest(&hop, pubring, xref)
 		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
@@ -374,7 +398,7 @@ func main() {
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
-	chain := "remailer@inwtx.net,remailer@dizum.com,banana@mixmaster.mixmin.net"
+	chain := "remailer@inwtx.net,dizum,banana"
 	fmt.Println(cutmarks(mixmsg(text, chain)))
 }
 

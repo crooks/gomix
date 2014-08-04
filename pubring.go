@@ -22,9 +22,13 @@ type pubring struct {
 	pk rsa.PublicKey // RSA Public Key
 }
 
-func import_pubring(filename string) (pub map[string]pubring) {
+func import_pubring(filename string) (pub map[string]pubring,
+																		  xref map[string]string) {
 	var err error
+	// pub = map of pubring structs
 	pub = make(map[string]pubring)
+	// xref = map of shortnames to addresses
+	xref = make(map[string]string)
 	f, err := os.Open(filename)
 	if err != nil {
 		panic(err)
@@ -63,6 +67,7 @@ func import_pubring(filename string) (pub map[string]pubring) {
 				rem.version = elements[3]
 				rem.caps = elements[4]
 				addy = elements[1]
+				xref[elements[0]] = addy
 				key_phase = 1
 			}
 		case 1:
