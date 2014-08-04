@@ -27,22 +27,26 @@ func randint(max int) (rint int) {
 	return
 }
 
-func candidates(p map[string]pubinfo) (c []string) {
+func candidates(p map[string]pubinfo, exit bool) (c []string) {
 	c = make([]string, 0, len(p))
   // Create a slice of addresses (for random node selection)
-  for a := range p {
-		c = append(c, a)
+  for addy := range p {
+		if exit && strings.Contains(p[addy].caps, "M") {
+			continue
+		}
+		c = append(c, addy)
 	}
 	return
 }
 
 // hoptest validates each chain hop and returns the hop's email address
-func hoptest(chain *[]string, pub map[string]pubinfo, xref map[string]string, addresses []string) (hop string) {
+func hoptest(chain *[]string, pub map[string]pubinfo, xref map[string]string, exit bool) (hop string) {
 	hop = popstr(chain)
+	addresses := candidates(pub, exit)
 	var exist bool // Test for key existence
 	if hop == "*" {
 		// random remailer selection
-		hop = addresses[randint(len(xref) - 1)]
+		hop = addresses[randint(len(addresses) - 1)]
 	} else if strings.Contains(hop, "@") {
 		/* Where an ampersand exists in the hop, it's assumed to be an email
 		address.  If not, it's assumed to be a shortname. */
