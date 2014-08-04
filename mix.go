@@ -325,32 +325,32 @@ func popstr(s *[]string) (element string) {
 	return
 }
 
-// hoptest tests for the existence of a given remailer shortname or address
-func hoptest(hop *string, pub map[string]pubring, xref map[string]string) {
-	h := *hop
+// hoptest validates each chain hop and returns the hop's email address
+func hoptest(chain *[]string, pub map[string]pubring, xref map[string]string) (hop string) {
+	hop = popstr(chain)
 	var exist bool // Test for key existence
 	/* Where an ampersand exists in the hop, it's assumed to be an email
 	address.  If not, it's assumed to be a shortname. */
-	if strings.Contains(h, "@") {
-		_, exist = pub[h]
+	if strings.Contains(hop, "@") {
+		_, exist = pub[hop]
 		if ! exist {
-			panic(h + ": Remailer address not known")
+			panic(hop + ": Remailer address not known")
 		}
 	} else {
-		_, exist = xref[h]
+		_, exist = xref[hop]
 		if ! exist {
-			panic(h + ": Remailer name not known")
+			panic(hop + ": Remailer name not known")
 		}
-		h = xref[h]
+		// Change hop to its cross-reference by shortname
+		hop = xref[hop]
 	}
-	*hop = h
+	return
 }
 
 func mixmsg(text string, chainstr string) (message []byte) {
 	chain := strings.Split(chainstr, ",")
 	pubring, xref := import_pubring("pubring.mix")
-	hop := popstr(&chain)
-	hoptest(&hop, pubring, xref)
+	hop := hoptest(&chain, pubring, xref)
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
@@ -366,8 +366,7 @@ func mixmsg(text string, chainstr string) (message []byte) {
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
 		inter := generate_intermediate(hop)
-		hop = popstr(&chain)
-		hoptest(&hop, pubring, xref)
+		hop = hoptest(&chain, pubring, xref)
 		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
@@ -398,7 +397,8 @@ func main() {
 	text += "To: steve@mixmin.net\n"
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
-	chain := "remailer@inwtx.net,dizum,banana"
+	chain := "banana,remailer@inwtx.net,dizum,banana"
 	fmt.Println(cutmarks(mixmsg(text, chain)))
+	//fmt.Println(len(cutmarks(mixmsg(text, chain))))
 }
 
