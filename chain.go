@@ -37,13 +37,27 @@ func randint(max int) (rint int) {
 	return
 }
 
+// str_contains tests for the membership of a string in a slice
+func str_contains(s string, slice []string) bool {
+	for _, n := range slice {
+		if n == s {
+			return true
+		}
+	}
+	return false
+}
+
 // candidates returns a slice of remailer addresses suitable for a given hop
-func candidates(p map[string]pubinfo, exit bool) (c []string) {
+func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
 	c = make([]string, 0, len(p))
   // Create a slice of addresses (for random node selection)
   for addy := range p {
 		if exit && strings.Contains(p[addy].caps, "M") {
 			// Exits are required and this is a Middle
+			continue
+		}
+		if str_contains(addy, dist) {
+			// Excluded due to distance
 			continue
 		}
 		c = append(c, addy)
@@ -53,42 +67,75 @@ func candidates(p map[string]pubinfo, exit bool) (c []string) {
 
 // chain_build takes a chain string and constructs a valid remailer chain
 func chain_build(chainstr string, pub map[string]pubinfo, xref map[string]string) (out_chain []string) {
+	dist := 3 // TODO Needs to be user-defined
+	if dist > max_chain_length {
+		dist = max_chain_length
+	}
 	var exist bool // Test for key existence
 	var addresses []string // Candidate remailers for each hop
 	in_chain := strings.Split(chainstr, ",")
+	if len(in_chain) > max_chain_length {
+		panic("Too many hops in chain")
+	}
+	// If dist is greater than the actual chain length, all hops will be unique.
+	if dist > len(in_chain) {
+		dist = len(in_chain)
+	}
+	var distance []string
+	in_dist := make([]string,0, dist) // n distance elements of input chain
+	out_dist := make([]string,0, dist) // n distance elements of output chain
 	out_chain = make([]string, 0, len(in_chain))
-	for {
-		hop := popstr(&in_chain)
-		if hop == "*" {
-			// Random remailer selection
-			if len(out_chain) == 0 {
-				addresses = candidates(pub, true)
-			} else {
-				addresses = candidates(pub, false)
-			}
-			hop = addresses[randint(len(addresses) - 1)]
-		} else if strings.Contains(hop, "@") {
+	// This iteration of in_chain converts any shortnames to addresses
+	for n, hop := range in_chain {
+		if strings.Contains(in_chain[n], "@") {
 			// Selection via remailer email address
-			/* Where an ampersand exists in the hop, it's assumed to be an email
-			address.  If not, it's assumed to be a shortname. */
 			_, exist = pub[hop]
-			if ! exist {
+	    if ! exist {
 				panic(hop + ": Remailer address not known")
 			}
-		} else {
+		} else if in_chain[n] != "*" {
 			// Selection via remailer shortname
 			_, exist = xref[hop]
 			if ! exist {
 				panic(hop + ": Remailer name not known")
 			}
 			// Change hop to its cross-reference by shortname
-			hop = xref[hop]
+			in_chain[n] = xref[hop]
+		}
+	}
+	// Loop until in_chain contains no more remailers
+	num_hops := len(in_chain)
+	for {
+		hop := popstr(&in_chain)
+		if hop == "*" {
+			// Random remailer selection
+			if len(out_chain) == 0 {
+				addresses = candidates(pub, distance, true)
+			} else {
+				addresses = candidates(pub, distance, false)
+			}
+			hop = addresses[randint(len(addresses) - 1)]
 		}
 		// Insert new hop at the start of the output chain
 		_ = insstr(&out_chain, hop, 0)
 		if len(in_chain) == 0 {
 			break
 		}
+		// The following section is concerned with distance parameter compliance
+		if len(out_chain) > dist {
+			out_dist = out_chain[:dist]
+		} else {
+			out_dist = out_chain
+		}
+		if len(in_chain) > dist {
+			in_dist = in_chain[len(in_chain) - dist:]
+		} else {
+			in_dist = in_chain
+		}
+		distance = append(in_dist, out_dist...)
+	}
+	if len(out_chain) != num_hops {
+		panic("Constructed chain length doesn't match input chain length")
 	}
 	return
 }

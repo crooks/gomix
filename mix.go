@@ -21,6 +21,7 @@ import (
 const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
+const max_chain_length = 20
 
 type final_hop struct {
 	packetid []byte // 16 Byte Packet-ID
@@ -368,7 +369,7 @@ func main() {
 	text += "Subject: Testing Gomix\n\n"
 	text += "This is a gomix test payload."
 	chain := "banana,*,*"
-	//fmt.Println(cutmarks(mixmsg(text, chain)))
-	fmt.Println(len(cutmarks(mixmsg(text, chain))))
+	fmt.Println(cutmarks(mixmsg(text, chain)))
+	//fmt.Println(len(cutmarks(mixmsg(text, chain))))
 }
 
