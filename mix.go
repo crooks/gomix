@@ -318,12 +318,12 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 }
 
 func mixmsg(text string, chainstr string) (message []byte) {
-	chain := strings.Split(chainstr, ",")
 	pubring, xref := import_pubring("pubring.mix")
-	hop := hoptest(&chain, pubring, xref, true)
+	chain := chain_build(chainstr, pubring, xref)
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
+	hop := popstr(&chain)
 	header := generate_header(final.bytes, pubring[hop])
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
@@ -336,7 +336,7 @@ func mixmsg(text string, chainstr string) (message []byte) {
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
 		inter := generate_intermediate(hop)
-		hop = hoptest(&chain, pubring, xref, false)
+		hop = popstr(&chain)
 		header = generate_header(inter.bytes, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
