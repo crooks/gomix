@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"strings"
+	"net/smtp"
 )
 
 func assemble(msg mail.Message) []byte {
@@ -41,4 +42,36 @@ func import_msg(filename string) []byte {
 		msg.Header["Subject"][0] = flag_subject
 	}
 	return assemble(*msg)
+}
+
+func sendmail(payload []byte, sendto string) {
+	var err error
+	c, err := smtp.Dial("127.0.0.1:25")
+	if err != nil {
+		panic(err)
+	}
+	err = c.Mail("nobody@nowhere.invalid")
+	if err != nil {
+		panic(err)
+	}
+	err = c.Rcpt(sendto)
+	if err != nil {
+		panic(err)
+	}
+	wc, err := c.Data()
+	if err != nil {
+		panic(err)
+	}
+	_, err = fmt.Fprintf(wc, string(payload))
+	if err != nil {
+		panic(err)
+	}
+	err = wc.Close()
+	if err != nil {
+		panic(err)
+	}
+	err = c.Quit()
+	if err != nil {
+		panic(err)
+	}
 }
