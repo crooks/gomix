@@ -285,17 +285,18 @@ func payload_encode(plain []byte) (payload bytes.Buffer) {
 }
 
 // cutmarks encodes a mixmsg into a Mixmaster formatted email payload
-func cutmarks(mixmsg []byte) (mixtext string) {
-	mixtext += "::\n"
-	mixtext += "Remailer-Type: Mixmaster 0.1\n\n"
-	mixtext += "-----BEGIN REMAILER MESSAGE-----\n"
-	mixtext += strconv.Itoa(len(mixmsg)) + "\n"
+func cutmarks(mixmsg []byte) []byte {
+	buf := new(bytes.Buffer)
+	buf.WriteString("::\n")
+	buf.WriteString("Remailer-Type: Mixmaster 0.1\n\n")
+	buf.WriteString("-----BEGIN REMAILER MESSAGE-----\n")
+	buf.WriteString(strconv.Itoa(len(mixmsg)) + "\n")
 	digest := md5.New()
 	digest.Write(mixmsg)
-	mixtext += b64enc(digest.Sum(nil)) + "\n"
-	mixtext += b64enc(mixmsg) + "\n"
-	mixtext +="-----END REMAILER MESSAGE-----"
-	return
+	buf.WriteString(b64enc(digest.Sum(nil)) + "\n")
+	buf.WriteString(b64enc(mixmsg) + "\n")
+	buf.WriteString("-----END REMAILER MESSAGE-----")
+	return buf.Bytes()
 }
 
 func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
@@ -320,9 +321,12 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	return
 }
 
-func mixmsg(msg []byte, chainstr string) (message []byte) {
+// mixmsg encodes a plaintext message into mixmaster format.
+func mixmsg(msg []byte, chainstr string) (message []byte, sendto string) {
 	pubring, xref := import_pubring("pubring.mix")
 	chain := chain_build(chainstr, pubring, xref)
+	// Retain the address of the entry remailer, the message must be sent to it.
+	sendto = chain[0]
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
 	final := generate_final()
@@ -336,6 +340,10 @@ func mixmsg(msg []byte, chainstr string) (message []byte) {
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
 	for {
+		// Once the chain length is zero, the message is ready for padding
+		if len(chain) == 0 {
+			break
+		}
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
 		inter := generate_intermediate(hop)
@@ -350,10 +358,6 @@ func mixmsg(msg []byte, chainstr string) (message []byte) {
 		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
 		copy(headers[512:], old_heads) // Append encrypted old headers
 		payload = encrypt_des_cbc(payload, inter.deskey, inter.ivs[144:])
-		// Once the chain length is zero, the message is ready for padding
-		if len(chain) == 0 {
-			break
-		}
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
@@ -394,7 +398,9 @@ func main() {
 		flag_to = flag_args[0]
 		message = import_msg(flag_args[1])
 	}
-	fmt.Println(cutmarks(mixmsg(message, flag_chain)))
+	encmsg, sendto := mixmsg(message, flag_chain)
+	encmsg = cutmarks(encmsg)
+	sendmail(encmsg, sendto)
 	//fmt.Println(len(cutmarks(mixmsg(message, flag_chain))))
 }
 
