@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"flag"
 	"encoding/binary"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"crypto/md5"
 	"crypto/des"
 	"crypto/aes"
+	"os"
 	"strings"
 	"strconv"
 )
@@ -268,16 +270,16 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
 }
 
 // payload_encode converts a plaintext message to Mixmaster's payload format
-func payload_encode(text string) (payload bytes.Buffer) {
+func payload_encode(plain []byte) (payload bytes.Buffer) {
 	// Add 6 to text length to accommodate 4 Byte payload_length plus 1 Byte
 	// each for Num Dests and Num Headers.
-	payload_length := uint32(len(text) + 2)
+	payload_length := uint32(len(plain) + 2)
 	lenbytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(lenbytes, payload_length)
 	payload.Write(lenbytes)
 	payload.WriteByte(0) // Number of dests
 	payload.WriteByte(0) // Nymber of header lines
-	payload.Write([]byte(text))
+	payload.Write(plain)
 	payload.Write(randbytes(10240 - payload.Len()))
 	return
 }
@@ -318,7 +320,7 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	return
 }
 
-func mixmsg(text string, chainstr string) (message []byte) {
+func mixmsg(msg []byte, chainstr string) (message []byte) {
 	pubring, xref := import_pubring("pubring.mix")
 	chain := chain_build(chainstr, pubring, xref)
 	headers := make([]byte, 512, 10240)
@@ -329,7 +331,7 @@ func mixmsg(text string, chainstr string) (message []byte) {
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
-	p := payload_encode(text)
+	p := payload_encode(msg)
 	payload := encrypt_des_cbc(p.Bytes(), final.deskey, final.iv)
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
@@ -362,14 +364,37 @@ func mixmsg(text string, chainstr string) (message []byte) {
 	return
 }
 
+func init() {
+	// Remailer chain
+	flag.StringVar(&flag_chain, "chain", "*,*,*", "Remailer chain")
+	flag.StringVar(&flag_chain, "l", "*,*,*", "Remailer chain")
+	// Recipient address
+	flag.StringVar(&flag_to, "to", "", "Recipient email address")
+	flag.StringVar(&flag_to, "t", "", "Recipient email address")
+	// Subject header
+	flag.StringVar(&flag_subject, "subject", "", "Subject header")
+	flag.StringVar(&flag_subject, "s", "", "Subject header")
+}
+
+var flag_chain string
+var flag_to string
+var flag_subject string
+var flag_args []string
+
 func main() {
-	text := "##\n"
-	text += "From: nobody@testing.invalid\n"
-	text += "To: steve@mixmin.net\n"
-	text += "Subject: Testing Gomix\n\n"
-	text += "This is a gomix test payload."
-	chain := "banana,*,*"
-	fmt.Println(cutmarks(mixmsg(text, chain)))
-	//fmt.Println(len(cutmarks(mixmsg(text, chain))))
+	var message []byte
+	flag.Parse()
+	flag_args = flag.Args()
+	if len(flag_args) == 0 {
+		os.Stderr.Write([]byte("No input filename provided\n"))
+		os.Exit(1)
+	} else if len(flag_args) == 1 {
+		message = import_msg(flag_args[0])
+	} else if len(flag_args) >= 2 {
+		flag_to = flag_args[0]
+		message = import_msg(flag_args[1])
+	}
+	fmt.Println(cutmarks(mixmsg(message, flag_chain)))
+	//fmt.Println(len(cutmarks(mixmsg(message, flag_chain))))
 }
 
