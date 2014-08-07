@@ -278,7 +278,11 @@ func payload_encode(plain []byte) (payload bytes.Buffer) {
 	binary.LittleEndian.PutUint32(lenbytes, payload_length)
 	payload.Write(lenbytes)
 	payload.WriteByte(0) // Number of dests
-	payload.WriteByte(0) // Nymber of header lines
+	payload.WriteByte(0) // Number of header lines
+	/* According to the Mixmaster spec, the following prefix to the user-data
+	should indicate an RFC2822 compliant payload.  In testing, it appears that
+	Mixmaster doesn't like. */
+	//payload.WriteString("##\x0D") // Mixmaster RFC2822 format indicator
 	payload.Write(plain)
 	payload.Write(randbytes(10240 - payload.Len()))
 	return
