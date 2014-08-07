@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"math/big"
 	"strings"
+	"os"
+	"fmt"
 )
 
 // popstr takes a pointer to a string slice and pops the last element
@@ -91,13 +93,15 @@ func chain_build(chainstr string, pub map[string]pubinfo, xref map[string]string
 			// Selection via remailer email address
 			_, exist = pub[hop]
 	    if ! exist {
-				panic(hop + ": Remailer address not known")
+				fmt.Fprintf(os.Stderr, "%s: Remailer address not known\n", hop)
+				os.Exit(1)
 			}
 		} else if in_chain[n] != "*" {
 			// Selection via remailer shortname
 			_, exist = xref[hop]
 			if ! exist {
-				panic(hop + ": Remailer name not known")
+				fmt.Fprintf(os.Stderr, "%s: Remailer shortname not known\n", hop)
+				os.Exit(1)
 			}
 			// Change hop to its cross-reference by shortname
 			in_chain[n] = xref[hop]
