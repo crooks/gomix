@@ -51,18 +51,42 @@ func str_contains(s string, slice []string) bool {
 
 // candidates returns a slice of remailer addresses suitable for a given hop
 func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
+	maxlat := 30
+	minlat := 0
+	minrel := 950
+	relfinal := 990
+	//TODO All above vars need to be user-defined
 	c = make([]string, 0, len(p))
   // Create a slice of addresses (for random node selection)
   for addy := range p {
-		if exit && strings.Contains(p[addy].caps, "M") {
-			// Exits are required and this is a Middle
-			continue
-		}
 		if str_contains(addy, dist) {
 			// Excluded due to distance
 			continue
 		}
+		if exit {
+			if strings.Contains(p[addy].caps, "M") {
+				// Exits are required and this is a Middle
+				continue
+			}
+			if p[addy].uptime < relfinal {
+				// Doesn't meet exit reliability requirements
+				continue
+			}
+		} else {
+			if p[addy].uptime < minrel {
+				// Doesn't meet reliability requirements
+				continue
+			}
+		}
+		if p[addy].latent > maxlat || p[addy].latent < minlat {
+			// Doesn't meet latency requirements
+			continue
+		}
 		c = append(c, addy)
+	}
+	if len(c) == 0 {
+		fmt.Fprintln(os.Stderr, "Insufficient remailers meet chain criteria")
+		os.Exit(1)
 	}
 	return
 }

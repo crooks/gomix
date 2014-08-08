@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"math/big"
+	"fmt"
 )
 
 type pubinfo struct {
@@ -20,6 +21,98 @@ type pubinfo struct {
 	version string // Mixmaster version
 	caps string // Remailer capstring
 	pk rsa.PublicKey // RSA Public Key
+	latent int // Latency (minutes)
+	uptime int // Uptime (10ths of a %)
+}
+
+func import_mlist2(filename string, pub map[string]pubinfo, xref map[string]string) (count int) {
+	var err error
+	f, err := os.Open(filename)
+	if err != nil {
+		panic(err)
+	}
+	scanner := bufio.NewScanner(f)
+	var elements []string
+	var line string //Each line in mlist2.txt
+	var rem_name string //Remailer name in stats
+	var rem_addy string //Remailer address from xref
+	var lat []string //Latency hours:minutes
+	var lathrs int //Latent Hours
+	var latmin int //Latent Minutes
+	var exists bool //Test for presence of remailer in xref
+	stat_phase := 0
+	count = 0
+	/* Stat phases are:
+	0 Expecting long string of dashes
+	*/
+	for scanner.Scan() {
+		line = scanner.Text()
+		switch stat_phase {
+		case 0:
+			// Expecting dashes
+			if strings.HasPrefix(line, "----------") {
+				stat_phase = 1
+			}
+		case 1:
+			// Expecting stats
+			line = strings.Split(line, "%")[0]
+			elements = strings.Fields(line)
+			if len(elements) == 5 {
+				rem_name = elements[0]
+				_, exists = xref[rem_name]
+				if exists {
+					rem_addy = xref[rem_name]
+					// Element 2 is Latency in the format (hrs:mins)
+					lat = strings.Split(elements[2], ":")
+					if lat[0] == "" {
+						lathrs = 0
+					} else {
+						lathrs, err = strconv.Atoi(lat[0])
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "%s: Invalid latent hours\n", rem_name)
+							continue
+						}
+						if lathrs < 0 || lathrs > 99 {
+							fmt.Fprintf(os.Stderr, "%s: Latent hours out of range\n", rem_name)
+							continue
+						}
+					}
+					latmin, err = strconv.Atoi(lat[1])
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "%s: Invalid latent minutes\n", rem_name)
+						continue
+					}
+					if latmin < 0 || latmin > 59 {
+						fmt.Fprintf(os.Stderr, "%s: Latent minutes out of range\n", rem_name)
+						continue
+					}
+					// Element 4 is Uptime in format (xxx.xx)
+					uptmp, err := strconv.ParseFloat(elements[4], 32)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "%s: Invalid uptime\n", rem_name)
+						continue
+					}
+					if uptmp < 0 || uptmp > 100 {
+						fmt.Fprintf(os.Stderr, "%s: Uptime out of range\n", rem_name)
+						continue
+					}
+					tmp := pub[rem_addy]
+					tmp.latent = (lathrs * 60) + latmin
+					tmp.uptime = int(uptmp * 10)
+					pub[rem_addy] = tmp
+					count += 1 // Increment count of processed remailers
+				} else {
+					fmt.Fprintf(os.Stderr, "%s: Unknown remailer\n", rem_name)
+				}
+			} else {
+				stat_phase = 2
+			}
+		case 2:
+			// Reserved for future mlist2.txt processing
+			break
+		}
+	}
+	return
 }
 
 func import_pubring(filename string) (pub map[string]pubinfo,

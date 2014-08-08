@@ -327,7 +327,10 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 
 // mixmsg encodes a plaintext message into mixmaster format.
 func mixmsg(msg []byte, chainstr string) (message []byte, sendto string) {
+	// Create the Public Keyring
 	pubring, xref := import_pubring("pubring.mix")
+	// Populate keyring's uptime and latency fields
+	_ = import_mlist2("mlist2.txt", pubring, xref)
 	chain := chain_build(chainstr, pubring, xref)
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
