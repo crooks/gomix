@@ -46,7 +46,7 @@ func import_msg(filename string) []byte {
 
 func sendmail(payload []byte, sendto string) {
 	var err error
-	c, err := smtp.Dial("127.0.0.1:25")
+	c, err := smtp.Dial(fmt.Sprintf("%s:%d", cfg.Mail.Smtprelay, cfg.Mail.Smtpport))
 	if err != nil {
 		panic(err)
 	}

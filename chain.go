@@ -51,10 +51,6 @@ func str_contains(s string, slice []string) bool {
 
 // candidates returns a slice of remailer addresses suitable for a given hop
 func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
-	maxlat := 30
-	minlat := 0
-	minrel := 950
-	relfinal := 990
 	//TODO All above vars need to be user-defined
 	c = make([]string, 0, len(p))
   // Create a slice of addresses (for random node selection)
@@ -68,17 +64,17 @@ func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
 				// Exits are required and this is a Middle
 				continue
 			}
-			if p[addy].uptime < relfinal {
+			if p[addy].uptime < cfg.Stats.Relfinal {
 				// Doesn't meet exit reliability requirements
 				continue
 			}
 		} else {
-			if p[addy].uptime < minrel {
+			if p[addy].uptime < cfg.Stats.Minrel {
 				// Doesn't meet reliability requirements
 				continue
 			}
 		}
-		if p[addy].latent > maxlat || p[addy].latent < minlat {
+		if p[addy].latent > cfg.Stats.Maxlat || p[addy].latent < cfg.Stats.Minlat {
 			// Doesn't meet latency requirements
 			continue
 		}

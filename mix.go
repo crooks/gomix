@@ -18,12 +18,26 @@ import (
 	"os"
 	"strings"
 	"strconv"
+	"code.google.com/p/gcfg"
 )
 
 const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
 const max_chain_length = 20
+
+type Config struct {
+  Mail struct {
+    Smtprelay string
+		Smtpport int
+  }
+  Stats struct {
+    Minlat int
+    Maxlat int
+    Minrel int
+    Relfinal int
+  }
+}
 
 type final_hop struct {
 	packetid []byte // 16 Byte Packet-ID
@@ -387,15 +401,32 @@ func init() {
 	flag.StringVar(&flag_subject, "s", "", "Subject header")
 }
 
+func read_config (filename string) {
+	var err error
+	// Defaults
+	cfg.Mail.Smtprelay = "127.0.0.1"
+	cfg.Mail.Smtpport = 25
+	cfg.Stats.Minrel = 950
+	cfg.Stats.Minlat = 2
+	cfg.Stats.Maxlat = 60
+
+	err = gcfg.ReadFileInto(&cfg, filename)
+  if err != nil {
+    panic(err)
+  }
+}
+
 var flag_chain string
 var flag_to string
 var flag_subject string
 var flag_args []string
+var cfg Config
 
 func main() {
-	var message []byte
 	flag.Parse()
 	flag_args = flag.Args()
+	read_config("mix.cfg")
+	var message []byte
 	if len(flag_args) == 0 {
 		os.Stderr.Write([]byte("No input filename provided\n"))
 		os.Exit(1)
