@@ -36,6 +36,7 @@ type Config struct {
     Maxlat int
     Minrel int
     Relfinal int
+		Numcopies int
   }
 }
 
@@ -185,11 +186,11 @@ func wrap(str string) (newstr string) {
 
 // generate_final creates a final-hop inner header.  No input variables are
 // required as all components of the header are generated internally.
-func generate_final() (h final_hop) {
+func generate_final(msgid []byte) (h final_hop) {
 	h.packetid = randbytes(16)
 	h.deskey = randbytes(24)
 	h.pkttype = uint8(1)
-	h.msgid = randbytes(16)
+	h.msgid = msgid
 	h.iv = randbytes(des.BlockSize)
 	h.timestamp = timestamp()
 
@@ -340,17 +341,12 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 }
 
 // mixmsg encodes a plaintext message into mixmaster format.
-func mixmsg(msg []byte, chainstr string) (message []byte, sendto string) {
-	// Create the Public Keyring
-	pubring, xref := import_pubring("pubring.mix")
-	// Populate keyring's uptime and latency fields
-	_ = import_mlist2("mlist2.txt", pubring, xref)
-	chain := chain_build(chainstr, pubring, xref)
+func mixmsg(msg []byte, msgid []byte, chain []string, pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
-	final := generate_final()
+	final := generate_final(msgid)
 	hop := popstr(&chain)
 	header := generate_header(final.bytes, pubring[hop])
 	// Populate the top 512 Bytes of headers
@@ -389,6 +385,48 @@ func mixmsg(msg []byte, chainstr string) (message []byte, sendto string) {
 	return
 }
 
+// copies encodes and emails n copies of a plaintext
+func copies() {
+	var message []byte
+	var exitnode string // Address of exit node (for multiple copy chains)
+	var got_exit = false // Flag to indicate an exit node has been selected
+	if len(flag_args) == 0 {
+		os.Stderr.Write([]byte("No input filename provided\n"))
+		os.Exit(1)
+	} else if len(flag_args) == 1 {
+		message = import_msg(flag_args[0])
+	} else if len(flag_args) >= 2 {
+		flag_to = flag_args[0]
+		message = import_msg(flag_args[1])
+	}
+	// Create the Public Keyring
+	pubring, xref := import_pubring("pubring.mix")
+	// Populate keyring's uptime and latency fields
+	_ = import_mlist2("mlist2.txt", pubring, xref)
+	in_chain := strings.Split(flag_chain, ",")
+	msgid := randbytes(16)
+	// If no copies flag is specified, use the config file NUMCOPIES
+	if flag_copies == 0 {
+		flag_copies = cfg.Stats.Numcopies
+	}
+	for n := 0; n < flag_copies; n++ {
+		if got_exit {
+			// Set the last node in the chain to the previously select exitnode
+			in_chain[len(in_chain) - 1] = exitnode
+		}
+		chain := chain_build(in_chain, pubring, xref)
+		fmt.Println(chain)
+		if ! got_exit {
+			exitnode = chain[len(chain) - 1]
+			got_exit = true
+		}
+		encmsg, sendto := mixmsg(message, msgid, chain, pubring, xref)
+		encmsg = cutmarks(encmsg)
+		sendmail(encmsg, sendto)
+	}
+	return
+}
+
 func init() {
 	// Remailer chain
 	flag.StringVar(&flag_chain, "chain", "*,*,*", "Remailer chain")
@@ -399,6 +437,11 @@ func init() {
 	// Subject header
 	flag.StringVar(&flag_subject, "subject", "", "Subject header")
 	flag.StringVar(&flag_subject, "s", "", "Subject header")
+	// Number of copies
+	flag.IntVar(&flag_copies, "copies", 0, "Number of copies")
+	flag.IntVar(&flag_copies, "c", 0, "Number of copies")
+	// Config file
+	flag.StringVar(&flag_config, "config", "mix.cfg", "Config file")
 }
 
 func read_config (filename string) {
@@ -409,10 +452,12 @@ func read_config (filename string) {
 	cfg.Stats.Minrel = 950
 	cfg.Stats.Minlat = 2
 	cfg.Stats.Maxlat = 60
+	cfg.Stats.Numcopies = 1
 
 	err = gcfg.ReadFileInto(&cfg, filename)
   if err != nil {
-    panic(err)
+    fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
   }
 }
 
@@ -420,25 +465,14 @@ var flag_chain string
 var flag_to string
 var flag_subject string
 var flag_args []string
+var flag_config string
+var flag_copies int
 var cfg Config
 
 func main() {
 	flag.Parse()
 	flag_args = flag.Args()
-	read_config("mix.cfg")
-	var message []byte
-	if len(flag_args) == 0 {
-		os.Stderr.Write([]byte("No input filename provided\n"))
-		os.Exit(1)
-	} else if len(flag_args) == 1 {
-		message = import_msg(flag_args[0])
-	} else if len(flag_args) >= 2 {
-		flag_to = flag_args[0]
-		message = import_msg(flag_args[1])
-	}
-	encmsg, sendto := mixmsg(message, flag_chain)
-	encmsg = cutmarks(encmsg)
-	sendmail(encmsg, sendto)
-	//fmt.Println(len(cutmarks(mixmsg(message, flag_chain))))
+	read_config(flag_config)
+	copies()
 }
 

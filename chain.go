@@ -88,14 +88,13 @@ func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
 }
 
 // chain_build takes a chain string and constructs a valid remailer chain
-func chain_build(chainstr string, pub map[string]pubinfo, xref map[string]string) (out_chain []string) {
+func chain_build(in_chain []string, pub map[string]pubinfo, xref map[string]string) (out_chain []string) {
 	dist := 3 // TODO Needs to be user-defined
 	if dist > max_chain_length {
 		dist = max_chain_length
 	}
 	var exist bool // Test for key existence
 	var addresses []string // Candidate remailers for each hop
-	in_chain := strings.Split(chainstr, ",")
 	if len(in_chain) > max_chain_length {
 		panic("Too many hops in chain")
 	}
@@ -134,8 +133,10 @@ func chain_build(chainstr string, pub map[string]pubinfo, xref map[string]string
 		if hop == "*" {
 			// Random remailer selection
 			if len(out_chain) == 0 {
+				// Construct a list of suitable exit remailers
 				addresses = candidates(pub, distance, true)
 			} else {
+				// Construct a list of all suitable remailers
 				addresses = candidates(pub, distance, false)
 			}
 			hop = addresses[randint(len(addresses) - 1)]
