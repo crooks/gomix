@@ -37,6 +37,7 @@ type Config struct {
     Minrel float32
     Relfinal float32
 		Numcopies int
+		Distance int
   }
 }
 
@@ -454,6 +455,7 @@ func read_config (filename string) {
 	cfg.Stats.Minlat = 2
 	cfg.Stats.Maxlat = 60
 	cfg.Stats.Numcopies = 1
+	cfg.Stats.Distance = 2
 
 	err = gcfg.ReadFileInto(&cfg, filename)
   if err != nil {

@@ -51,7 +51,6 @@ func str_contains(s string, slice []string) bool {
 
 // candidates returns a slice of remailer addresses suitable for a given hop
 func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
-	//TODO All above vars need to be user-defined
 	c = make([]string, 0, len(p))
   // Create a slice of addresses (for random node selection)
   for addy := range p {
@@ -89,7 +88,7 @@ func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
 
 // chain_build takes a chain string and constructs a valid remailer chain
 func chain_build(in_chain []string, pub map[string]pubinfo, xref map[string]string) (out_chain []string) {
-	dist := 3 // TODO Needs to be user-defined
+	dist := cfg.Stats.Distance
 	if dist > max_chain_length {
 		dist = max_chain_length
 	}
