@@ -34,8 +34,8 @@ type Config struct {
   Stats struct {
     Minlat int
     Maxlat int
-    Minrel int
-    Relfinal int
+    Minrel float32
+    Relfinal float32
 		Numcopies int
   }
 }
@@ -449,7 +449,8 @@ func read_config (filename string) {
 	// Defaults
 	cfg.Mail.Smtprelay = "127.0.0.1"
 	cfg.Mail.Smtpport = 25
-	cfg.Stats.Minrel = 950
+	cfg.Stats.Minrel = 98.0
+	cfg.Stats.Relfinal = 99.0
 	cfg.Stats.Minlat = 2
 	cfg.Stats.Maxlat = 60
 	cfg.Stats.Numcopies = 1

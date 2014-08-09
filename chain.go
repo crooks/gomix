@@ -64,12 +64,12 @@ func candidates(p map[string]pubinfo, dist []string, exit bool) (c []string) {
 				// Exits are required and this is a Middle
 				continue
 			}
-			if p[addy].uptime < cfg.Stats.Relfinal {
+			if p[addy].uptime < int(cfg.Stats.Relfinal * 10) {
 				// Doesn't meet exit reliability requirements
 				continue
 			}
 		} else {
-			if p[addy].uptime < cfg.Stats.Minrel {
+			if p[addy].uptime < int(cfg.Stats.Minrel * 10) {
 				// Doesn't meet reliability requirements
 				continue
 			}
