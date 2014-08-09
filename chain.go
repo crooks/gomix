@@ -96,7 +96,8 @@ func chain_build(in_chain []string, pub map[string]pubinfo, xref map[string]stri
 	var exist bool // Test for key existence
 	var addresses []string // Candidate remailers for each hop
 	if len(in_chain) > max_chain_length {
-		panic("Too many hops in chain")
+		fmt.Fprintf(os.Stderr, "%d hops exceeds maximum of %d", len(in_chain), max_chain_length)
+		os.Exit(1)
 	}
 	// If dist is greater than the actual chain length, all hops will be unique.
 	if dist > len(in_chain) {

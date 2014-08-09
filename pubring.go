@@ -29,7 +29,8 @@ func import_mlist2(filename string, pub map[string]pubinfo, xref map[string]stri
 	var err error
 	f, err := os.Open(filename)
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	scanner := bufio.NewScanner(f)
 	var elements []string
@@ -124,7 +125,8 @@ func import_pubring(filename string) (pub map[string]pubinfo,
 	xref = make(map[string]string)
 	f, err := os.Open(filename)
 	if err != nil {
-		panic(err)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	scanner := bufio.NewScanner(f)
 	var elements []string
