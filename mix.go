@@ -187,8 +187,8 @@ func wrap(str string) (newstr string) {
 
 // generate_final creates a final-hop inner header.  No input variables are
 // required as all components of the header are generated internally.
-func generate_final(msgid []byte) (h final_hop) {
-	h.packetid = randbytes(16)
+func generate_final(msgid, packetid []byte) (h final_hop) {
+	h.packetid = packetid
 	h.deskey = randbytes(24)
 	h.pkttype = uint8(1)
 	h.msgid = msgid
@@ -297,7 +297,7 @@ func payload_encode(plain []byte) (payload bytes.Buffer) {
 	payload.WriteByte(0) // Number of header lines
 	/* According to the Mixmaster spec, the following prefix to the user-data
 	should indicate an RFC2822 compliant payload.  In testing, it appears that
-	Mixmaster doesn't like. */
+	Mixmaster doesn't like it. */
 	//payload.WriteString("##\x0D") // Mixmaster RFC2822 format indicator
 	payload.Write(plain)
 	payload.Write(randbytes(10240 - payload.Len()))
@@ -342,12 +342,12 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 }
 
 // mixmsg encodes a plaintext message into mixmaster format.
-func mixmsg(msg []byte, msgid []byte, chain []string, pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
+func mixmsg(msg, msgid, packetid []byte, chain []string, pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
-	final := generate_final(msgid)
+	final := generate_final(msgid, packetid)
 	hop := popstr(&chain)
 	header := generate_header(final.bytes, pubring[hop])
 	// Populate the top 512 Bytes of headers
@@ -406,6 +406,7 @@ func copies() {
 	_ = import_mlist2("mlist2.txt", pubring, xref)
 	in_chain := strings.Split(flag_chain, ",")
 	msgid := randbytes(16)
+	packetid := randbytes(16)
 	// If no copies flag is specified, use the config file NUMCOPIES
 	if flag_copies == 0 {
 		flag_copies = cfg.Stats.Numcopies
@@ -421,9 +422,10 @@ func copies() {
 			exitnode = chain[len(chain) - 1]
 			got_exit = true
 		}
-		encmsg, sendto := mixmsg(message, msgid, chain, pubring, xref)
+		encmsg, sendto := mixmsg(message, msgid, packetid, chain, pubring, xref)
 		encmsg = cutmarks(encmsg)
 		sendmail(encmsg, sendto)
+		//fmt.Println(len(encmsg), sendto)
 	}
 	return
 }
