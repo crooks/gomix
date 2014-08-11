@@ -235,29 +235,24 @@ func generate_partial(msgid, packetid []byte, cnum, numc int) (inner, deskey, iv
 
 // generate_intermediate creates an intermediate-hop inner header.  The only
 // input variable is a string containing the email address of the next hop.
-func generate_intermediate(nexthop string) (h intermediate_hop) {
-	h.packetid = randbytes(16)
-	h.deskey = randbytes(24)
-	h.pkttype = 0
-	h.ivs = randbytes(152)
-	nexthoppad := 80 - len(nexthop)
-	h.nexthop = []byte(nexthop + strings.Repeat("\x00", nexthoppad))
-	h.timestamp = timestamp()
-
+func generate_intermediate(nexthop string) (inner, deskey, ivs []byte) {
 	buf := new(bytes.Buffer)
-	buf.Write(h.packetid)
-	buf.Write(h.deskey)
-	buf.WriteByte(h.pkttype)
-	buf.Write(h.ivs)
-	buf.Write(h.nexthop)
-	buf.Write(h.timestamp)
+	buf.Write(randbytes(16)) // Packet ID
+	deskey = randbytes(24)
+	buf.Write(deskey) // 3DES Key
+	buf.WriteByte(uint8(0)) // Packet Type 0
+	ivs = randbytes(des.BlockSize * 19)
+	buf.Write(ivs) // IV
+	nhpad := 80 - len(nexthop)
+	nh := nexthop + strings.Repeat("\x00", nhpad)
+	buf.WriteString(nh) // Next Hop
+	buf.Write(timestamp()) // Timestamp
 	digest := md5.New()
 	digest.Write(buf.Bytes())
-	h.digest = digest.Sum(nil)
-	buf.Write(h.digest)
+	buf.Write(digest.Sum(nil)) // Digest
 	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
-	h.bytes = buf.Bytes()
+	inner = buf.Bytes()
 	return
 }
 
@@ -428,7 +423,7 @@ func mixprep() {
 // mixmsg encodes a plaintext fragment into mixmaster format.
 func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 						pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
-	var final []byte // Bytes of final header
+	var inner []byte // Bytes of inner header (inter, final or partial types)
 	var deskey []byte // 3DES Key in final header
 	var iv []byte // IV in final header
 	// Retain the address of the entry remailer, the message must be sent to it.
@@ -437,12 +432,12 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	old_heads := make([]byte, 512, 9728)
 	if numc == 1 {
 		// Single fragment message so use a type 1 final header
-		final, deskey, iv = generate_final(msgid, packetid)
+		inner, deskey, iv = generate_final(msgid, packetid)
 	} else {
-		final, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
+		inner, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
 	}
 	hop := popstr(&chain)
-	header := generate_header(final, pubring[hop])
+	header := generate_header(inner, pubring[hop])
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
@@ -457,18 +452,18 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 		}
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
-		inter := generate_intermediate(hop)
+		inner, deskey, iv = generate_intermediate(hop)
 		hop = popstr(&chain)
-		header = generate_header(inter.bytes, pubring[hop])
+		header = generate_header(inner, pubring[hop])
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
 		from the new header. */
-		old_heads = encrypt_headers(headers, inter.deskey, inter.ivs)
+		old_heads = encrypt_headers(headers, deskey, iv)
 		// Extend the headers slice by 512 Bytes
 		headers = headers[0:len(headers) + 512]
 		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
 		copy(headers[512:], old_heads) // Append encrypted old headers
-		payload = encrypt_des_cbc(payload, inter.deskey, inter.ivs[144:])
+		payload = encrypt_des_cbc(payload, deskey, iv[144:])
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
