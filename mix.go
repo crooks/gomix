@@ -15,6 +15,7 @@ import (
 	"crypto/md5"
 	"crypto/des"
 	"crypto/aes"
+	"math"
 	"os"
 	"strings"
 	"strconv"
@@ -24,7 +25,8 @@ import (
 const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
-const max_chain_length = 20
+const max_chain_length int = 20
+const max_frag_length int = 10234
 
 type Config struct {
 	Files struct {
@@ -189,30 +191,45 @@ func wrap(str string) (newstr string) {
 	return
 }
 
-// generate_final creates a final-hop inner header.  No input variables are
-// required as all components of the header are generated internally.
-func generate_final(msgid, packetid []byte) (h final_hop) {
-	h.packetid = packetid
-	h.deskey = randbytes(24)
-	h.pkttype = uint8(1)
-	h.msgid = msgid
-	h.iv = randbytes(des.BlockSize)
-	h.timestamp = timestamp()
-
+// generate_final creates a final-hop inner header.
+func generate_final(msgid, packetid []byte) (inner, deskey, iv []byte) {
 	buf := new(bytes.Buffer)
-	buf.Write(h.packetid)
-	buf.Write(h.deskey)
-	buf.WriteByte(h.pkttype)
-	buf.Write(h.msgid)
-	buf.Write(h.iv)
-	buf.Write(h.timestamp)
+	buf.Write(packetid) // Packet ID
+	deskey = randbytes(24)
+	buf.Write(deskey) // 3DES Key
+	buf.WriteByte(uint8(1)) // Packet Type 1
+	buf.Write(msgid) // Message ID
+	iv = randbytes(des.BlockSize)
+	buf.Write(iv) // IV
+	buf.Write(timestamp()) // Timestamp
 	digest := md5.New()
 	digest.Write(buf.Bytes())
-	h.digest = digest.Sum(nil)
-	buf.Write(h.digest)
+	buf.Write(digest.Sum(nil)) // Inner Digest
 	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
-	h.bytes = buf.Bytes()
+	inner = buf.Bytes()
+	return
+}
+
+// generate_partial creates a final-hop partial (type 2) inner header.
+func generate_partial(msgid, packetid []byte, cnum, numc int) (inner, deskey, iv []byte) {
+	buf := new(bytes.Buffer)
+	buf.Write(packetid) // Packet ID
+	deskey = randbytes(24)
+	buf.Write(deskey) // 3DES Key
+	buf.WriteByte(uint8(2)) // Packet Type 2
+	buf.WriteByte(uint8(cnum)) // Chunk Number
+	buf.WriteByte(uint8(numc)) // Number of chunks
+	buf.Write(msgid) // Message ID
+	iv = randbytes(des.BlockSize)
+	buf.Write(iv) // IV
+	buf.Write(timestamp()) // Timestamp
+	digest := md5.New()
+	digest.Write(buf.Bytes())
+	buf.Write(digest.Sum(nil)) // Inner Digest
+	padlen := inner_header_bytes - buf.Len()
+	buf.Write(randbytes(padlen))
+	inner = buf.Bytes()
 	return
 }
 
@@ -239,7 +256,7 @@ func generate_intermediate(nexthop string) (h intermediate_hop) {
 	h.digest = digest.Sum(nil)
 	buf.Write(h.digest)
 	padlen := inner_header_bytes - buf.Len()
-	buf.Write([]byte(strings.Repeat("\x00", padlen)))
+	buf.Write(randbytes(padlen))
 	h.bytes = buf.Bytes()
 	return
 }
@@ -345,20 +362,92 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	return
 }
 
-// mixmsg encodes a plaintext message into mixmaster format.
-func mixmsg(msg, msgid, packetid []byte, chain []string, pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
+// mixprep fetches the plaintext and prepares it for mix encoding
+func mixprep() {
+	var message []byte
+	var cnum int // Chunk number
+	var numc int // Number of chunks
+	if len(flag_args) == 0 {
+		os.Stderr.Write([]byte("No input filename provided\n"))
+		os.Exit(1)
+	} else if len(flag_args) == 1 {
+		// A single arg should be the filename
+		message = import_msg(flag_args[0])
+	} else if len(flag_args) >= 2 {
+		// Two args should be recipient and filename
+		flag_to = flag_args[0]
+		message = import_msg(flag_args[1])
+	}
+	msglen := len(message)
+	// Create the Public Keyring
+	pubring, xref := import_pubring(cfg.Files.Pubring)
+	// Populate keyring's uptime and latency fields
+	_ = import_mlist2(cfg.Files.Mlist2, pubring, xref)
+	in_chain := strings.Split(flag_chain, ",")
+	msgid := randbytes(16)
+	numc = int(math.Ceil(float64(msglen) / float64(max_frag_length)))
+	cnum = 1
+	var exitnode string // Address of exit node (for multiple copy chains)
+	var got_exit bool // Flag to indicate an exit node has been selected
+	var packetid []byte // Final hop Packet ID
+	var first_byte int // First byte of message slice
+	var last_byte int // Last byte of message slice
+	for cnum = 1; cnum <= numc; cnum++ {
+		// First byte of message fragment
+		first_byte = (cnum - 1) * max_frag_length
+		last_byte = first_byte + max_frag_length
+		// Don't slice beyond the end of the message
+		if last_byte > msglen {
+			last_byte = msglen
+		}
+		got_exit = false
+		packetid = randbytes(16)
+		// If no copies flag is specified, use the config file NUMCOPIES
+		if flag_copies == 0 {
+			flag_copies = cfg.Stats.Numcopies
+		}
+		for n := 0; n < flag_copies; n++ {
+			if got_exit {
+				// Set the last node in the chain to the previously select exitnode
+				in_chain[len(in_chain) - 1] = exitnode
+			}
+			chain := chain_build(in_chain, pubring, xref)
+			fmt.Println(chain)
+			if ! got_exit {
+				exitnode = chain[len(chain) - 1]
+				got_exit = true
+			}
+			encmsg, sendto := mixmsg(message[first_byte:last_byte], msgid, packetid, chain, cnum, numc, pubring, xref)
+			encmsg = cutmarks(encmsg)
+			sendmail(encmsg, sendto)
+			//fmt.Println(len(encmsg), sendto)
+		} // End of copies loop
+	} // End of fragments loop
+}
+
+// mixmsg encodes a plaintext fragment into mixmaster format.
+func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
+						pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
+	var final []byte // Bytes of final header
+	var deskey []byte // 3DES Key in final header
+	var iv []byte // IV in final header
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
 	headers := make([]byte, 512, 10240)
 	old_heads := make([]byte, 512, 9728)
-	final := generate_final(msgid, packetid)
+	if numc == 1 {
+		// Single fragment message so use a type 1 final header
+		final, deskey, iv = generate_final(msgid, packetid)
+	} else {
+		final, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
+	}
 	hop := popstr(&chain)
-	header := generate_header(final.bytes, pubring[hop])
+	header := generate_header(final, pubring[hop])
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
 	p := payload_encode(msg)
-	payload := encrypt_des_cbc(p.Bytes(), final.deskey, final.iv)
+	payload := encrypt_des_cbc(p.Bytes(), deskey, iv)
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
 	for {
@@ -387,50 +476,6 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, pubring map[string]pubi
 	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
 	message = make([]byte, 20480)
 	message = append(headers, payload...)
-	return
-}
-
-// copies encodes and emails n copies of a plaintext
-func copies() {
-	var message []byte
-	var exitnode string // Address of exit node (for multiple copy chains)
-	var got_exit = false // Flag to indicate an exit node has been selected
-	if len(flag_args) == 0 {
-		os.Stderr.Write([]byte("No input filename provided\n"))
-		os.Exit(1)
-	} else if len(flag_args) == 1 {
-		message = import_msg(flag_args[0])
-	} else if len(flag_args) >= 2 {
-		flag_to = flag_args[0]
-		message = import_msg(flag_args[1])
-	}
-	// Create the Public Keyring
-	pubring, xref := import_pubring(cfg.Files.Pubring)
-	// Populate keyring's uptime and latency fields
-	_ = import_mlist2(cfg.Files.Mlist2, pubring, xref)
-	in_chain := strings.Split(flag_chain, ",")
-	msgid := randbytes(16)
-	packetid := randbytes(16)
-	// If no copies flag is specified, use the config file NUMCOPIES
-	if flag_copies == 0 {
-		flag_copies = cfg.Stats.Numcopies
-	}
-	for n := 0; n < flag_copies; n++ {
-		if got_exit {
-			// Set the last node in the chain to the previously select exitnode
-			in_chain[len(in_chain) - 1] = exitnode
-		}
-		chain := chain_build(in_chain, pubring, xref)
-		fmt.Println(chain)
-		if ! got_exit {
-			exitnode = chain[len(chain) - 1]
-			got_exit = true
-		}
-		encmsg, sendto := mixmsg(message, msgid, packetid, chain, pubring, xref)
-		encmsg = cutmarks(encmsg)
-		sendmail(encmsg, sendto)
-		//fmt.Println(len(encmsg), sendto)
-	}
 	return
 }
 
@@ -484,6 +529,6 @@ func main() {
 	flag.Parse()
 	flag_args = flag.Args()
 	read_config(flag_config)
-	copies()
+	mixprep()
 }
 
