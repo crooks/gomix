@@ -27,6 +27,10 @@ const base64_line_wrap int = 40
 const max_chain_length = 20
 
 type Config struct {
+	Files struct {
+		Pubring string
+		Mlist2 string
+	}
   Mail struct {
     Smtprelay string
 		Smtpport int
@@ -401,9 +405,9 @@ func copies() {
 		message = import_msg(flag_args[1])
 	}
 	// Create the Public Keyring
-	pubring, xref := import_pubring("pubring.mix")
+	pubring, xref := import_pubring(cfg.Files.Pubring)
 	// Populate keyring's uptime and latency fields
-	_ = import_mlist2("mlist2.txt", pubring, xref)
+	_ = import_mlist2(cfg.Files.Mlist2, pubring, xref)
 	in_chain := strings.Split(flag_chain, ",")
 	msgid := randbytes(16)
 	packetid := randbytes(16)
@@ -450,6 +454,8 @@ func init() {
 func read_config (filename string) {
 	var err error
 	// Defaults
+	cfg.Files.Pubring = "pubring.mix"
+	cfg.Files.Mlist2 = "mlist2.txt"
 	cfg.Mail.Smtprelay = "127.0.0.1"
 	cfg.Mail.Smtpport = 25
 	cfg.Stats.Minrel = 98.0
