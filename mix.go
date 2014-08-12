@@ -27,8 +27,8 @@ const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
 const max_chain_length int = 20
-//const max_frag_length int = 100
-const max_frag_length int = 10234
+const max_frag_length int = 100
+//const max_frag_length int = 10234
 
 type Config struct {
 	Files struct {
@@ -304,15 +304,20 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
 }
 
 // payload_encode converts a plaintext message to Mixmaster's payload format
-func payload_encode(plain []byte) (payload bytes.Buffer) {
+func payload_encode(plain []byte, cnum int) (payload bytes.Buffer) {
 	// Add 6 to text length to accommodate 4 Byte payload_length plus 1 Byte
 	// each for Num Dests and Num Headers.
-	payload_length := uint32(len(plain) + 2)
+	payload_length := len(plain)
+	if cnum == 1 {
+		payload_length += 2
+	}
 	lenbytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(lenbytes, payload_length)
+	binary.LittleEndian.PutUint32(lenbytes, uint32(payload_length))
 	payload.Write(lenbytes)
-	payload.WriteByte(0) // Number of dests
-	payload.WriteByte(0) // Number of header lines
+	if cnum == 1 {
+		payload.WriteByte(0) // Number of dests
+		payload.WriteByte(0) // Number of header lines
+	}
 	/* According to the Mixmaster spec, the following prefix to the user-data
 	should indicate an RFC2822 compliant payload.  In testing, it appears that
 	Mixmaster doesn't like it. */
@@ -369,10 +374,15 @@ func mixprep() {
 		os.Stderr.Write([]byte("No input filename provided\n"))
 		os.Exit(1)
 	} else if flag_stdin {
+		// Flag instructs message should be read from stdin
 		message, err = ioutil.ReadAll(os.Stdin)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
+		}
+		if len(flag_args) == 1 {
+			// A single arg on an stdin msg implies a recipient address
+			flag_to = flag_args[0]
 		}
 	} else if len(flag_args) == 1 {
 		// A single arg should be the filename
@@ -414,6 +424,10 @@ func mixprep() {
 		if flag_copies == 0 {
 			flag_copies = cfg.Stats.Numcopies
 		}
+		if flag_copies > 10 {
+			// Limit copies to a maximum of 10
+			flag_copies = 10
+		}
 		for n := 0; n < flag_copies; n++ {
 			if got_exit {
 				// Set the last node in the chain to the previously select exitnode
@@ -454,7 +468,7 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	// Populate the top 512 Bytes of headers
 	copy(headers[:512], header.bytes)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
-	p := payload_encode(msg)
+	p := payload_encode(msg, cnum)
 	payload := encrypt_des_cbc(p.Bytes(), deskey, iv)
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
