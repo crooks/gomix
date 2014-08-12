@@ -27,8 +27,8 @@ const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
 const max_chain_length int = 20
-const max_frag_length int = 100
-//const max_frag_length int = 10234
+//const max_frag_length int = 100
+const max_frag_length int = 10234
 
 type Config struct {
 	Files struct {
@@ -47,28 +47,6 @@ type Config struct {
 		Numcopies int
 		Distance int
   }
-}
-
-type final_hop struct {
-	packetid []byte // 16 Byte Packet-ID
-	deskey []byte // 24 Byte DES key
-	pkttype uint8 // Packet Type (Intermediate(0) or Final(1)
-  msgid []byte // 16 Byte Message-ID
-	iv []byte // 8 Byte IV
-  timestamp []byte // 7 Bytes (Intro = 48,48,48,48,0)
-	digest []byte // 16 Byte MD5 digest
-	bytes []byte // All the final_hop headers, in a 328 Byte array
-}
-
-type intermediate_hop struct {
-	packetid []byte // 16 Byte Packet-ID
-	deskey []byte // 24 Byte DES key
-	pkttype uint8 // Packet Type (Intermediate(0) or Final(1)
-  ivs []byte // 152 Byte IVs (19 * 8)
-	nexthop []byte // 80 Byte next hop address
-  timestamp []byte // 7 Bytes (Intro = 48,48,48,48,0)
-	digest []byte // 16 Byte MD5 digest
-	bytes []byte  // All the intermediate_hop headers in a 328 Byte array
 }
 
 type header struct {
@@ -110,6 +88,8 @@ func generate_header(inner_bytes []byte, pubkey pubinfo) (h header) {
 			h.rsalen = 3
 		case 512:
 			h.rsalen = 4
+		default:
+			panic("Unexpected RSA data length")
 	}
 	h.iv = randbytes(des.BlockSize)
 
@@ -323,7 +303,13 @@ func payload_encode(plain []byte, cnum int) (payload bytes.Buffer) {
 	Mixmaster doesn't like it. */
 	//payload.WriteString("##\x0D") // Mixmaster RFC2822 format indicator
 	payload.Write(plain)
-	payload.Write(randbytes(10240 - payload.Len()))
+	if payload.Len() < 10240 {
+		// Pad payload with random bytes
+		payload.Write(randbytes(10240 - payload.Len()))
+	} else if payload.Len() > 10240 {
+		// Assertion check
+		panic("Payload exceeds 10240 byte limit")
+	}
 	return
 }
 
