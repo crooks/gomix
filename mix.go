@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/base64"
 	"encoding/hex"
+	"io/ioutil"
 	"bytes"
 	"time"
 	"crypto/cipher"
@@ -26,6 +27,7 @@ const inner_header_bytes int = 328
 const timestamp_intro string = "0000\x00"
 const base64_line_wrap int = 40
 const max_chain_length int = 20
+//const max_frag_length int = 100
 const max_frag_length int = 10234
 
 type Config struct {
@@ -359,12 +361,19 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 
 // mixprep fetches the plaintext and prepares it for mix encoding
 func mixprep() {
+	var err error
 	var message []byte
 	var cnum int // Chunk number
 	var numc int // Number of chunks
-	if len(flag_args) == 0 {
+	if len(flag_args) == 0 && ! flag_stdin {
 		os.Stderr.Write([]byte("No input filename provided\n"))
 		os.Exit(1)
+	} else if flag_stdin {
+		message, err = ioutil.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	} else if len(flag_args) == 1 {
 		// A single arg should be the filename
 		message = import_msg(flag_args[0])
@@ -374,6 +383,10 @@ func mixprep() {
 		message = import_msg(flag_args[1])
 	}
 	msglen := len(message)
+	if msglen == 0 {
+		fmt.Fprintln(os.Stderr, "No bytes in message")
+		os.Exit(1)
+	}
 	// Create the Public Keyring
 	pubring, xref := import_pubring(cfg.Files.Pubring)
 	// Populate keyring's uptime and latency fields
@@ -489,6 +502,9 @@ func init() {
 	flag.IntVar(&flag_copies, "c", 0, "Number of copies")
 	// Config file
 	flag.StringVar(&flag_config, "config", "mix.cfg", "Config file")
+	// Read STDIN
+	flag.BoolVar(&flag_stdin, "read-mail", false, "Read a message from stdin")
+	flag.BoolVar(&flag_stdin, "R", false, "Read a message from stdin")
 }
 
 func read_config (filename string) {
@@ -518,6 +534,7 @@ var flag_subject string
 var flag_args []string
 var flag_config string
 var flag_copies int
+var flag_stdin bool
 var cfg Config
 
 func main() {
