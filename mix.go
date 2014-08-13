@@ -29,6 +29,7 @@ const base64_line_wrap int = 40
 const max_chain_length int = 20
 //const max_frag_length int = 100
 const max_frag_length int = 10234
+const version string = "0.1a"
 
 type Config struct {
 	Files struct {
@@ -317,7 +318,8 @@ func payload_encode(plain []byte, cnum int) (payload bytes.Buffer) {
 func cutmarks(mixmsg []byte) []byte {
 	buf := new(bytes.Buffer)
 	buf.WriteString("::\n")
-	buf.WriteString("Remailer-Type: Mixmaster 0.1\n\n")
+	header := fmt.Sprintf("Remailer-Type: Mixmaster Go %s\n\n", version)
+	buf.WriteString(header)
 	buf.WriteString("-----BEGIN REMAILER MESSAGE-----\n")
 	buf.WriteString(strconv.Itoa(len(mixmsg)) + "\n")
 	digest := md5.New()
@@ -505,6 +507,9 @@ func init() {
 	// Read STDIN
 	flag.BoolVar(&flag_stdin, "read-mail", false, "Read a message from stdin")
 	flag.BoolVar(&flag_stdin, "R", false, "Read a message from stdin")
+	// Print Version
+	flag.BoolVar(&flag_version, "version", false, "Print version string")
+	flag.BoolVar(&flag_version, "V", false, "Print version string")
 }
 
 func read_config (filename string) {
@@ -535,12 +540,17 @@ var flag_args []string
 var flag_config string
 var flag_copies int
 var flag_stdin bool
+var flag_version bool
 var cfg Config
 
 func main() {
 	flag.Parse()
 	flag_args = flag.Args()
-	read_config(flag_config)
-	mixprep()
+	if flag_version {
+		fmt.Println(version)
+	} else {
+		read_config(flag_config)
+		mixprep()
+	}
 }
 
