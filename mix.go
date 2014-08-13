@@ -50,60 +50,47 @@ type Config struct {
   }
 }
 
-type header struct {
-	keyid []byte // 16 Byte Public KeyID
-	rsalen uint8 // 1 Byte RSA Data Length
-	/*
-	To maintain compatibility with older Mixmaster versions, the rsalen is
-	interpreted in the following manner:-
-	128 = 128 Bytes RSA (1024 bit encryption)
-	  2 = 256 Bytes RSA (2048 bit encryption)
-		3 = 384 Bytes RSA (3072 bit encryption)
-		4 = 512 Bytes RSA (4096 bit encryption)
-	*/
-	enckey []byte // RSA encoded session key (for inner header)
-	iv []byte // 8 Byte 3DES IV (for inner header)
-	encinner []byte // 328 Byte encrypted inner header
-	bytes []byte // The entire header in a Byte array
-}
-
 // generate_header creates the outer header.
-func generate_header(inner_bytes []byte, pubkey pubinfo) (h header) {
+func generate_header(inner_bytes []byte, pubkey pubinfo) []byte {
+	deskey := make([]byte, 24)
+	iv := make([]byte, des.BlockSize)
+	var enckey []byte
+	var rsalen uint8
 	/*
 	Headers are not populated in the same order as they're stored in the packet.
 	This is because the deskey has to be RSA encrypted early.
 	*/
-	h.keyid, _ = hex.DecodeString(pubkey.keyid)
-	deskey := randbytes(24)
-	h.enckey = rsa_encrypt(&pubkey.pk, deskey)
+	keyid, err := hex.DecodeString(pubkey.keyid)
+	if err != nil {
+		panic(err)
+	}
+	copy(deskey, randbytes(24))
+	enckey = rsa_encrypt(&pubkey.pk, deskey)
 	// The outer header is padded to 512 Bytes for 1024 bit keys and to
 	// 1024 Bytes for all other key sizes.
 	headlen := 1024
-	switch len(h.enckey) {
+	switch len(enckey) {
 		case 128:
-			h.rsalen = 128
+			rsalen = 128
 			headlen = 512  // All other cases use 1024 Byte headers
 		case 256:
-			h.rsalen = 2
+			rsalen = 2
 		case 384:
-			h.rsalen = 3
+			rsalen = 3
 		case 512:
-			h.rsalen = 4
+			rsalen = 4
 		default:
 			panic("Unexpected RSA data length")
 	}
-	h.iv = randbytes(des.BlockSize)
-
-	//fmt.Printf("keyid=%d, key=%d, inner=%d\n", len(h.keyid), len(h.enckey), len(inner_bytes))
-	h.encinner = encrypt_des_cbc(inner_bytes, deskey, h.iv)
 
 	buf := new(bytes.Buffer)
-	buf.Write(h.keyid)
-	buf.WriteByte(h.rsalen)
-	buf.Write(h.enckey)
-	buf.Write(h.iv)
-	buf.Write(h.encinner)
-	if headlen >= 1024 {
+	buf.Write(keyid) // Public Keyid
+	buf.WriteByte(rsalen) // Length of RSA data
+	buf.Write(enckey) // RSA data
+	copy(iv, randbytes(des.BlockSize))
+	buf.Write(iv) // 3DES IV
+	buf.Write(encrypt_des_cbc(inner_bytes, deskey, iv)) // Encrypted inner header
+	if headlen > 512 {
 		// This is an extended header and needs further work
 		/* Here follows the specification as I interpret it:-
 		Public key ID                [   16 bytes]
@@ -125,8 +112,10 @@ func generate_header(inner_bytes []byte, pubkey pubinfo) (h header) {
 	// Pad the header to its defined length of 512 or 1024 Bytes
 	padlen := headlen - buf.Len()
 	buf.Write(randbytes(padlen))
-	h.bytes = buf.Bytes()
-	return
+	if buf.Len() != 512 && buf.Len() != 1024 {
+		panic("Invalid header size")
+	}
+	return buf.Bytes()
 }
 
 // randbytes returns n Bytes of random data
@@ -454,7 +443,7 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	hop := popstr(&chain)
 	header := generate_header(inner, pubring[hop])
 	// Populate the top 512 Bytes of headers
-	copy(headers[:512], header.bytes)
+	copy(headers[:512], header)
 	// Add the clunky old Mixmaster fields to the payload and then encrypt it
 	p := payload_encode(msg, cnum)
 	payload := encrypt_des_cbc(p.Bytes(), deskey, iv)
@@ -476,7 +465,7 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 		old_heads = encrypt_headers(headers, deskey, iv)
 		// Extend the headers slice by 512 Bytes
 		headers = headers[0:len(headers) + 512]
-		copy(headers[:512], header.bytes) // Write new header to first 512 Bytes
+		copy(headers[:512], header) // Write new header to first 512 Bytes
 		copy(headers[512:], old_heads) // Append encrypted old headers
 		payload = encrypt_des_cbc(payload, deskey, iv[144:])
 	}
