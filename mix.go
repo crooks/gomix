@@ -478,7 +478,21 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	return
 }
 
+func meminfo() {
+	procdev := fmt.Sprintf("/proc/%d/status", os.Getpid())
+	fd, _ := os.Open(procdev)
+	defer fd.Close()
+	b := make([]byte, 4096)
+	fd.Read(b)
+	for _, lin := range strings.Split(string(b), "\n") {
+	  if "Vm" == lin[:2] {
+		  fmt.Printf("%s\n", lin)
+		}
+	}
+}
+
 func init() {
+	var err error
 	// Remailer chain
 	flag.StringVar(&flag_chain, "chain", "*,*,*", "Remailer chain")
 	flag.StringVar(&flag_chain, "l", "*,*,*", "Remailer chain")
@@ -499,11 +513,10 @@ func init() {
 	// Print Version
 	flag.BoolVar(&flag_version, "version", false, "Print version string")
 	flag.BoolVar(&flag_version, "V", false, "Print version string")
-}
+	// Memory usage
+	flag.BoolVar(&flag_meminfo, "meminfo", false, "Print memory info")
 
-func read_config (filename string) {
-	var err error
-	// Defaults
+	// Set defaults and read config file
 	cfg.Files.Pubring = "pubring.mix"
 	cfg.Files.Mlist2 = "mlist2.txt"
 	cfg.Mail.Smtprelay = "127.0.0.1"
@@ -515,7 +528,7 @@ func read_config (filename string) {
 	cfg.Stats.Numcopies = 1
 	cfg.Stats.Distance = 2
 
-	err = gcfg.ReadFileInto(&cfg, filename)
+	err = gcfg.ReadFileInto(&cfg, flag_config)
   if err != nil {
     fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -530,6 +543,7 @@ var flag_config string
 var flag_copies int
 var flag_stdin bool
 var flag_version bool
+var flag_meminfo bool
 var cfg Config
 
 func main() {
@@ -538,8 +552,10 @@ func main() {
 	if flag_version {
 		fmt.Println(version)
 	} else {
-		read_config(flag_config)
 		mixprep()
+	}
+	if flag_meminfo {
+		meminfo()
 	}
 }
 
