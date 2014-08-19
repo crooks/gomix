@@ -44,13 +44,13 @@ func import_msg(filename string) []byte {
 	return assemble(*msg)
 }
 
-func sendmail(payload []byte, sendto string) {
+func smtprelay(payload []byte, sendto string) {
 	var err error
 	c, err := smtp.Dial(fmt.Sprintf("%s:%d", cfg.Mail.Smtprelay, cfg.Mail.Smtpport))
 	if err != nil {
 		panic(err)
 	}
-	err = c.Mail("nobody@nowhere.invalid")
+	err = c.Mail(cfg.Mail.Envsender)
 	if err != nil {
 		panic(err)
 	}
@@ -71,6 +71,16 @@ func sendmail(payload []byte, sendto string) {
 		panic(err)
 	}
 	err = c.Quit()
+	if err != nil {
+		panic(err)
+	}
+}
+
+func sendmail(payload []byte, sendto string) {
+	var err error
+	auth := smtp.PlainAuth("", cfg.Mail.Smtpusername, cfg.Mail.Smtppassword, cfg.Mail.Smtprelay)
+	relay := fmt.Sprintf("%s:%d", cfg.Mail.Smtprelay, cfg.Mail.Smtpport)
+	err = smtp.SendMail(relay, auth, cfg.Mail.Envsender, []string{sendto}, payload)
 	if err != nil {
 		panic(err)
 	}

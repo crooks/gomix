@@ -37,8 +37,12 @@ type Config struct {
 		Mlist2 string
 	}
   Mail struct {
+		Sendmail bool
     Smtprelay string
 		Smtpport int
+		Envsender string
+		Smtpusername string
+		Smtppassword string
   }
   Stats struct {
     Minlat int
@@ -418,7 +422,11 @@ func mixprep() {
 			}
 			encmsg, sendto := mixmsg(message[first_byte:last_byte], msgid, packetid, chain, cnum, numc, pubring, xref)
 			encmsg = cutmarks(encmsg)
-			sendmail(encmsg, sendto)
+			if cfg.Mail.Sendmail {
+				sendmail(encmsg, sendto)
+			} else {
+				smtprelay(encmsg, sendto)
+			}
 			//fmt.Println(len(encmsg), sendto)
 		} // End of copies loop
 	} // End of fragments loop
@@ -521,6 +529,10 @@ func init() {
 	cfg.Files.Mlist2 = "mlist2.txt"
 	cfg.Mail.Smtprelay = "127.0.0.1"
 	cfg.Mail.Smtpport = 25
+	cfg.Mail.Envsender = "nobody@nowhere.invalid"
+	cfg.Mail.Sendmail = true
+	cfg.Mail.Smtpusername = "nobody"
+	cfg.Mail.Smtppassword = "password"
 	cfg.Stats.Minrel = 98.0
 	cfg.Stats.Relfinal = 99.0
 	cfg.Stats.Minlat = 2
