@@ -14,6 +14,8 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/md5"
+	//"crypto/sha256"
+	//"crypto/hmac"
 	"crypto/des"
 	"crypto/aes"
 	"math"
@@ -55,11 +57,10 @@ type Config struct {
 }
 
 // generate_header creates the outer header.
-func generate_header(inner_bytes []byte, pubkey pubinfo) []byte {
+func generate_header(inner_bytes []byte, pubkey pubinfo, rsalen uint8) []byte {
 	deskey := make([]byte, 24)
 	iv := make([]byte, des.BlockSize)
 	var enckey []byte
-	var rsalen uint8
 	/*
 	Headers are not populated in the same order as they're stored in the packet.
 	This is because the deskey has to be RSA encrypted early.
@@ -70,21 +71,26 @@ func generate_header(inner_bytes []byte, pubkey pubinfo) []byte {
 	}
 	copy(deskey, randbytes(24))
 	enckey = rsa_encrypt(&pubkey.pk, deskey)
-	// The outer header is padded to 512 Bytes for 1024 bit keys and to
-	// 1024 Bytes for all other key sizes.
-	headlen := 1024
 	switch len(enckey) {
-		case 128:
-			rsalen = 128
-			headlen = 512  // All other cases use 1024 Byte headers
-		case 256:
-			rsalen = 2
-		case 384:
-			rsalen = 3
-		case 512:
-			rsalen = 4
-		default:
-			panic("Unexpected RSA data length")
+	case 128:
+		if rsalen != 128 {
+			panic("Stated RSA length (128) doesn't match data length")
+		}
+	case 256:
+		if rsalen != 2 {
+			panic("Stated RSA length (2) doesn't agree with 2048 bit data")
+		}
+	case 384:
+		if rsalen != 3 {
+			panic("Stated RSA length (3) doesn't agree with 3072 bit data")
+		}
+	case 512:
+		if rsalen != 4 {
+			panic("Stated RSA length (4) doesn't agree with 4072 bit data")
+		}
+	default:
+		e := fmt.Sprintf("%d: Unacceptable encrypted data length", len(enckey))
+		panic(e)
 	}
 
 	buf := new(bytes.Buffer)
@@ -93,14 +99,18 @@ func generate_header(inner_bytes []byte, pubkey pubinfo) []byte {
 	buf.Write(enckey) // RSA data
 	copy(iv, randbytes(des.BlockSize))
 	buf.Write(iv) // 3DES IV
-	buf.Write(encrypt_des_cbc(inner_bytes, deskey, iv)) // Encrypted inner header
-	if headlen > 512 {
+	enc_inner_bytes := encrypt_des_cbc(inner_bytes, deskey, iv)
+	var padlen int // How many bytes of padding to apply
+	if rsalen == 128 {
+		buf.Write(enc_inner_bytes)
+		padlen = 512 - buf.Len()
+	} else {
 		// This is an extended header and needs further work
 		/* Here follows the specification as I interpret it:-
 		Public key ID                [   16 bytes]
 		Length of RSA-encrypted data [    1 byte ]
 		RSA-encrypted data           [  512 bytes]
-		3DES Session Key              [  24 bytes ]
+				3DES Session Key              [  24 bytes ]
 				Random HMAC Key               [  64 bytes ]
 				HMAC hash (Anti-tag)          [  32 bytes ]
 				HMAC hash (Body)              [  32 bytes ]
@@ -111,10 +121,17 @@ func generate_header(inner_bytes []byte, pubkey pubinfo) []byte {
 		Padding                      [    n bytes]
 		-----------------------------------------
 		Total                        [ 1024 bytes]
+		rsa = new(bytes.Buffer)
+		rsa.Write(deskey)
+		hmackey := randbytes(64)
+		mac := hmac.New(sha256.New, hmackey)
+		mac.Write("Next header block")
+		rsa.Write(mac.Sum(nil)) // HMAC Anti-tag
+		mac = hmac.New(sha256.New, hmackey)
 		*/
+		padlen = 1024 - buf.Len()
 	}
 	// Pad the header to its defined length of 512 or 1024 Bytes
-	padlen := headlen - buf.Len()
 	buf.Write(randbytes(padlen))
 	if buf.Len() != 512 && buf.Len() != 1024 {
 		panic("Invalid header size")
@@ -277,32 +294,32 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
   return
 }
 
-// payload_encode converts a plaintext message to Mixmaster's payload format
-func payload_encode(plain []byte, cnum int) (payload bytes.Buffer) {
+// body_encode converts a plaintext message to Mixmaster's payload format
+func body_encode(plain []byte, cnum int) (body bytes.Buffer) {
 	// Add 6 to text length to accommodate 4 Byte payload_length plus 1 Byte
 	// each for Num Dests and Num Headers.
-	payload_length := len(plain)
+	body_length := len(plain)
 	if cnum == 1 {
-		payload_length += 2
+		body_length += 2
 	}
 	lenbytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(lenbytes, uint32(payload_length))
-	payload.Write(lenbytes)
+	binary.LittleEndian.PutUint32(lenbytes, uint32(body_length))
+	body.Write(lenbytes)
 	if cnum == 1 {
-		payload.WriteByte(0) // Number of dests
-		payload.WriteByte(0) // Number of header lines
+		body.WriteByte(0) // Number of dests
+		body.WriteByte(0) // Number of header lines
 	}
 	/* According to the Mixmaster spec, the following prefix to the user-data
 	should indicate an RFC2822 compliant payload.  In testing, it appears that
 	Mixmaster doesn't like it. */
 	//payload.WriteString("##\x0D") // Mixmaster RFC2822 format indicator
-	payload.Write(plain)
-	if payload.Len() < 10240 {
+	body.Write(plain)
+	if body.Len() < 10240 {
 		// Pad payload with random bytes
-		payload.Write(randbytes(10240 - payload.Len()))
-	} else if payload.Len() > 10240 {
+		body.Write(randbytes(10240 - body.Len()))
+	} else if body.Len() > 10240 {
 		// Assertion check
-		panic("Payload exceeds 10240 byte limit")
+		panic("Message body exceeds 10240 byte limit")
 	}
 	return
 }
@@ -323,7 +340,8 @@ func cutmarks(mixmsg []byte) []byte {
 	return buf.Bytes()
 }
 
-func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
+func encrypt_headers(h *[]byte, key, ivs []byte) {
+	headers := *h
 	if len(headers) % 512 != 0 {
 		panic("Header is not a multiple of 512 Bytes")
 	}
@@ -334,15 +352,12 @@ func encrypt_headers(headers, key, ivs []byte) (encrypted []byte) {
 	var s int // Start position in header block
 	var e int // End position in header block
 	header_count := len(headers) / 512
-	buf := new(bytes.Buffer)
 	for h := 0; h < header_count; h++ {
 		iv = ivs[h * 8: (h + 1) * 8]
 		s = h * 512
 		e = (h + 1) * 512
-		buf.Write(encrypt_des_cbc(headers[s:e], key, iv))
+		copy(headers[s:e], encrypt_des_cbc(headers[s:e], key, iv))
 	}
-	encrypted = buf.Bytes()
-	return
 }
 
 // mixprep fetches the plaintext and prepares it for mix encoding
@@ -432,29 +447,54 @@ func mixprep() {
 	} // End of fragments loop
 }
 
+// keylen uses the encoded pubkey length to determine the header size and rsalen
+func keylen(l uint16) (headlen int, rsalen uint8) {
+	switch l {
+	case 1024:
+		headlen = 512
+		rsalen = 128
+	case 2048:
+		headlen = 1024
+		rsalen = 2
+	case 3072:
+		headlen = 1024
+		rsalen = 3
+	case 4096:
+		headlen = 1024
+		rsalen = 4
+	default:
+		panic("Unexpected Public Key length")
+	}
+	return
+}
+
 // mixmsg encodes a plaintext fragment into mixmaster format.
 func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
-						pubring map[string]pubinfo, xref map[string]string) (message []byte, sendto string) {
+						pubring map[string]pubinfo, xref map[string]string) (payload []byte, sendto string) {
 	var inner []byte // Bytes of inner header (inter, final or partial types)
 	var deskey []byte // 3DES Key in final header
 	var iv []byte // IV in final header
+	var ivs []byte // 19 IVs in Intermediate header
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
-	headers := make([]byte, 512, 10240)
-	old_heads := make([]byte, 512, 9728)
+	body := make([]byte, 10240)
 	if numc == 1 {
 		// Single fragment message so use a type 1 final header
 		inner, deskey, iv = generate_final(msgid, packetid)
 	} else {
 		inner, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
 	}
+	// Add the clunky old Mixmaster fields to the body and then encrypt it
+	p := body_encode(msg, cnum)
+	copy(body, encrypt_des_cbc(p.Bytes(), deskey, iv))
 	hop := popstr(&chain)
-	header := generate_header(inner, pubring[hop])
-	// Populate the top 512 Bytes of headers
-	copy(headers[:512], header)
-	// Add the clunky old Mixmaster fields to the payload and then encrypt it
-	p := payload_encode(msg, cnum)
-	payload := encrypt_des_cbc(p.Bytes(), deskey, iv)
+	var headlen int // Length of header required to accomodate this key
+	var rsalen uint8 // RSA data length to write into header (128, 2, 3 or 4)
+	headlen, rsalen = keylen(pubring[hop].keylen)
+	// Initially create headers with sufficient length for the first header
+	headers := make([]byte, headlen, 10240)
+	// Populate the top headlen Bytes of headers
+	copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
 	for {
@@ -464,25 +504,27 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 		}
 		/* inter only requires the previous hop address so this step is performed
 		before popping the next hop from the chain. */
-		inner, deskey, iv = generate_intermediate(hop)
+		inner, deskey, ivs = generate_intermediate(hop)
 		hop = popstr(&chain)
-		header = generate_header(inner, pubring[hop])
+		headlen, rsalen = keylen(pubring[hop].keylen)
 		/* At this point, the new header hasn't been inserted so the entire header
 		chain comprises old headers that need to be encrypted with the key and ivs
 		from the new header. */
-		old_heads = encrypt_headers(headers, deskey, iv)
-		// Extend the headers slice by 512 Bytes
-		headers = headers[0:len(headers) + 512]
-		copy(headers[:512], header) // Write new header to first 512 Bytes
-		copy(headers[512:], old_heads) // Append encrypted old headers
-		payload = encrypt_des_cbc(payload, deskey, iv[144:])
+		encrypt_headers(&headers, deskey, ivs)
+		// Extend the headers slice by headlen Bytes
+		headers = headers[0:len(headers) + headlen]
+		copy(headers[headlen:], headers) // Move all the headers down by 512 bytes
+		copy(body, encrypt_des_cbc(body, deskey, ivs[144:]))
+		// Write new header to first 512 Bytes
+		copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
 	headers = headers[0:10240]
 	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
-	message = make([]byte, 20480)
-	message = append(headers, payload...)
+	payload = make([]byte, 20480)
+	copy(payload[:10240], headers)
+	copy(payload[10240:], body)
 	return
 }
 
@@ -531,8 +573,8 @@ func init() {
 	cfg.Mail.Smtpport = 25
 	cfg.Mail.Envsender = "nobody@nowhere.invalid"
 	cfg.Mail.Sendmail = true
-	cfg.Mail.Smtpusername = "nobody"
-	cfg.Mail.Smtppassword = "password"
+	cfg.Mail.Smtpusername = ""
+	cfg.Mail.Smtppassword = ""
 	cfg.Stats.Minrel = 98.0
 	cfg.Stats.Relfinal = 99.0
 	cfg.Stats.Minlat = 2
