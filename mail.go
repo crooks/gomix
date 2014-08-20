@@ -76,6 +76,7 @@ func smtprelay(payload []byte, sendto string) {
 	}
 }
 
+// sendmail invokes go's sendmail method
 func sendmail(payload []byte, sendto string) {
 	var err error
 	auth := smtp.PlainAuth("", cfg.Mail.Smtpusername, cfg.Mail.Smtppassword, cfg.Mail.Smtprelay)
