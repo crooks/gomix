@@ -20,6 +20,7 @@ type pubinfo struct {
 	keyid string // 16 Byte Mixmaster KeyID
 	version string // Mixmaster version
 	caps string // Remailer capstring
+	keylen uint16 // Stated key length
 	pk rsa.PublicKey // RSA Public Key
 	latent int // Latency (minutes)
 	uptime int // Uptime (10ths of a %)
@@ -211,6 +212,7 @@ func import_pubring(filename string) (pub map[string]pubinfo,
 					key_phase = 0
 					continue
 				}
+				rem.keylen = encoded_keylen
 				// Cut between N and E: (1024 / 8) + 2 = 130
 				midpoint := (encoded_keylen / 8) + 2
 				rem.pk.N = bytes_to_bigint(keydata[2:midpoint])
