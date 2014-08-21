@@ -31,7 +31,7 @@ const base64_line_wrap int = 40
 const max_chain_length int = 20
 //const max_frag_length int = 100
 const max_frag_length int = 10234
-const version string = "0.1a"
+const version string = "0.1b"
 
 type Config struct {
 	Files struct {
@@ -185,14 +185,16 @@ func wrap(str string) (newstr string) {
 }
 
 // generate_final creates a final-hop inner header.
-func generate_final(msgid, packetid []byte) (inner, deskey, iv []byte) {
+func generate_final(msgid, packetid, body []byte) []byte {
 	buf := new(bytes.Buffer)
 	buf.Write(packetid) // Packet ID
-	deskey = randbytes(24)
+	deskey := randbytes(24)
 	buf.Write(deskey) // 3DES Key
 	buf.WriteByte(uint8(1)) // Packet Type 1
 	buf.Write(msgid) // Message ID
-	iv = randbytes(des.BlockSize)
+	iv := randbytes(des.BlockSize)
+	// Encrypt the body
+	copy(body, encrypt_des_cbc(body, deskey, iv))
 	buf.Write(iv) // IV
 	buf.Write(timestamp()) // Timestamp
 	digest := md5.New()
@@ -200,21 +202,22 @@ func generate_final(msgid, packetid []byte) (inner, deskey, iv []byte) {
 	buf.Write(digest.Sum(nil)) // Inner Digest
 	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
-	inner = buf.Bytes()
-	return
+	return buf.Bytes()
 }
 
 // generate_partial creates a final-hop partial (type 2) inner header.
-func generate_partial(msgid, packetid []byte, cnum, numc int) (inner, deskey, iv []byte) {
+func generate_partial(msgid, packetid, body []byte, cnum, numc int) []byte {
 	buf := new(bytes.Buffer)
 	buf.Write(packetid) // Packet ID
-	deskey = randbytes(24)
+	deskey := randbytes(24)
 	buf.Write(deskey) // 3DES Key
 	buf.WriteByte(uint8(2)) // Packet Type 2
 	buf.WriteByte(uint8(cnum)) // Chunk Number
 	buf.WriteByte(uint8(numc)) // Number of chunks
 	buf.Write(msgid) // Message ID
-	iv = randbytes(des.BlockSize)
+	iv := randbytes(des.BlockSize)
+	// Encrypt the body
+	copy(body, encrypt_des_cbc(body, deskey, iv))
 	buf.Write(iv) // IV
 	buf.Write(timestamp()) // Timestamp
 	digest := md5.New()
@@ -222,19 +225,24 @@ func generate_partial(msgid, packetid []byte, cnum, numc int) (inner, deskey, iv
 	buf.Write(digest.Sum(nil)) // Inner Digest
 	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
-	inner = buf.Bytes()
-	return
+	return buf.Bytes()
 }
 
 // generate_intermediate creates an intermediate-hop inner header.  The only
 // input variable is a string containing the email address of the next hop.
-func generate_intermediate(nexthop string) (inner, deskey, ivs []byte) {
+func generate_intermediate(nexthop string, headers, body []byte) []byte {
 	buf := new(bytes.Buffer)
 	buf.Write(randbytes(16)) // Packet ID
-	deskey = randbytes(24)
+	deskey := randbytes(24)
 	buf.Write(deskey) // 3DES Key
 	buf.WriteByte(uint8(0)) // Packet Type 0
-	ivs = randbytes(des.BlockSize * 19)
+	ivs := randbytes(des.BlockSize * 19)
+	/* At this point, the new header hasn't been inserted so the entire header
+	chain comprises old headers that need to be encrypted with the key and ivs
+	from the new header. */
+	encrypt_headers(headers, deskey, ivs)
+	// The body is encrypted with the last of the 19 IVs
+	copy(body, encrypt_des_cbc(body, deskey, ivs[144:]))
 	buf.Write(ivs) // IV
 	nhpad := 80 - len(nexthop)
 	nh := nexthop + strings.Repeat("\x00", nhpad)
@@ -245,8 +253,7 @@ func generate_intermediate(nexthop string) (inner, deskey, ivs []byte) {
 	buf.Write(digest.Sum(nil)) // Digest
 	padlen := inner_header_bytes - buf.Len()
 	buf.Write(randbytes(padlen))
-	inner = buf.Bytes()
-	return
+	return buf.Bytes()
 }
 
 // encrypt_des_cfb performs Triple DES CFB encryption on a byte slice.  For
@@ -341,8 +348,7 @@ func cutmarks(mixmsg []byte) []byte {
 	return buf.Bytes()
 }
 
-func encrypt_headers(h *[]byte, key, ivs []byte) {
-	headers := *h
+func encrypt_headers(headers, deskey, ivs []byte) {
 	if len(headers) % 512 != 0 {
 		panic("Header is not a multiple of 512 Bytes")
 	}
@@ -357,7 +363,7 @@ func encrypt_headers(h *[]byte, key, ivs []byte) {
 		iv = ivs[h * 8: (h + 1) * 8]
 		s = h * 512
 		e = (h + 1) * 512
-		copy(headers[s:e], encrypt_des_cbc(headers[s:e], key, iv))
+		copy(headers[s:e], encrypt_des_cbc(headers[s:e], deskey, iv))
 	}
 }
 
@@ -472,10 +478,7 @@ func keylen(l uint16) (headlen int, rsalen uint8) {
 // mixmsg encodes a plaintext fragment into mixmaster format.
 func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 						pubring map[string]pubinfo, xref map[string]string) (payload []byte, sendto string) {
-	var inner []byte // Bytes of inner header (inter, final or partial types)
-	var deskey []byte // 3DES Key in final header
-	var iv []byte // IV in final header
-	var ivs []byte // 19 IVs in Intermediate header
+	inner := make([]byte, 328) // Bytes of inner header (inter, final or partial types)
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
 	body := make([]byte, 10240)
@@ -483,12 +486,10 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	copy(body, body_encode(msg, cnum))
 	if numc == 1 {
 		// Single fragment message so use a type 1 final header
-		inner, deskey, iv = generate_final(msgid, packetid)
+		copy(inner, generate_final(msgid, packetid, body))
 	} else {
-		inner, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
+		copy(inner, generate_partial(msgid, packetid, body, cnum, numc))
 	}
-	// Encrypt the body
-	copy(body, encrypt_des_cbc(body, deskey, iv))
 	hop := popstr(&chain)
 	var headlen int // Length of header required to accomodate this key
 	var rsalen uint8 // RSA data length to write into header (128, 2, 3 or 4)
@@ -504,19 +505,15 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 		if len(chain) == 0 {
 			break
 		}
-		/* inter only requires the previous hop address so this step is performed
+		/* intermediate headers include the previous hop address so this step is performed
 		before popping the next hop from the chain. */
-		inner, deskey, ivs = generate_intermediate(hop)
+		copy(inner, generate_intermediate(hop, headers, body))
 		hop = popstr(&chain)
+		// Establish how big a header will be for this specific hop
 		headlen, rsalen = keylen(pubring[hop].keylen)
-		/* At this point, the new header hasn't been inserted so the entire header
-		chain comprises old headers that need to be encrypted with the key and ivs
-		from the new header. */
-		encrypt_headers(&headers, deskey, ivs)
 		// Extend the headers slice by headlen Bytes
 		headers = headers[0:len(headers) + headlen]
 		copy(headers[headlen:], headers) // Move all the headers down by 512 bytes
-		copy(body, encrypt_des_cbc(body, deskey, ivs[144:]))
 		// Write new header to first 512 Bytes
 		copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
 	}
