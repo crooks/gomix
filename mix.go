@@ -295,9 +295,10 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
 }
 
 // body_encode converts a plaintext message to Mixmaster's payload format
-func body_encode(plain []byte, cnum int) (body bytes.Buffer) {
-	// Add 6 to text length to accommodate 4 Byte payload_length plus 1 Byte
-	// each for Num Dests and Num Headers.
+func body_encode(plain []byte, cnum int) []byte {
+	/* Chunk number is used to determine that length needs to be +2 on the
+	first chunk to accommodate the dests and headers.*/
+	body := new(bytes.Buffer)
 	body_length := len(plain)
 	if cnum == 1 {
 		body_length += 2
@@ -321,7 +322,7 @@ func body_encode(plain []byte, cnum int) (body bytes.Buffer) {
 		// Assertion check
 		panic("Message body exceeds 10240 byte limit")
 	}
-	return
+	return body.Bytes()
 }
 
 // cutmarks encodes a mixmsg into a Mixmaster formatted email payload
@@ -478,20 +479,21 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	// Retain the address of the entry remailer, the message must be sent to it.
 	sendto = chain[0]
 	body := make([]byte, 10240)
+	// Convert the plaintext to mixmaster body format
+	copy(body, body_encode(msg, cnum))
 	if numc == 1 {
 		// Single fragment message so use a type 1 final header
 		inner, deskey, iv = generate_final(msgid, packetid)
 	} else {
 		inner, deskey, iv = generate_partial(msgid, packetid, cnum, numc)
 	}
-	// Add the clunky old Mixmaster fields to the body and then encrypt it
-	p := body_encode(msg, cnum)
-	copy(body, encrypt_des_cbc(p.Bytes(), deskey, iv))
+	// Encrypt the body
+	copy(body, encrypt_des_cbc(body, deskey, iv))
 	hop := popstr(&chain)
 	var headlen int // Length of header required to accomodate this key
 	var rsalen uint8 // RSA data length to write into header (128, 2, 3 or 4)
 	headlen, rsalen = keylen(pubring[hop].keylen)
-	// Initially create headers with sufficient length for the first header
+	// Initially create headers with sufficient length for the exit header
 	headers := make([]byte, headlen, 10240)
 	// Populate the top headlen Bytes of headers
 	copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
