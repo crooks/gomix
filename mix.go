@@ -11,11 +11,12 @@ import (
 	"io/ioutil"
 	"bytes"
 	"time"
+	"hash"
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/md5"
-	//"crypto/sha256"
-	//"crypto/hmac"
+	"crypto/sha256"
+	"crypto/hmac"
 	"crypto/des"
 	"crypto/aes"
 	"math"
@@ -57,10 +58,7 @@ type Config struct {
 }
 
 // generate_header creates the outer header.
-func generate_header(inner_bytes []byte, pubkey pubinfo, rsalen uint8) []byte {
-	deskey := make([]byte, 24)
-	iv := make([]byte, des.BlockSize)
-	var enckey []byte
+func generate_header(inner, headers, body []byte, pubkey pubinfo, rsalen int) []byte {
 	/*
 	Headers are not populated in the same order as they're stored in the packet.
 	This is because the deskey has to be RSA encrypted early.
@@ -69,41 +67,21 @@ func generate_header(inner_bytes []byte, pubkey pubinfo, rsalen uint8) []byte {
 	if err != nil {
 		panic(err)
 	}
+	// Create 3DES key and IV
+	deskey := make([]byte, 24)
+	iv := make([]byte, des.BlockSize)
 	copy(deskey, randbytes(24))
-	enckey = rsa_encrypt(&pubkey.pk, deskey)
-	switch len(enckey) {
-	case 128:
-		if rsalen != 128 {
-			panic("Stated RSA length (128) doesn't match data length")
-		}
-	case 256:
-		if rsalen != 2 {
-			panic("Stated RSA length (2) doesn't agree with 2048 bit data")
-		}
-	case 384:
-		if rsalen != 3 {
-			panic("Stated RSA length (3) doesn't agree with 3072 bit data")
-		}
-	case 512:
-		if rsalen != 4 {
-			panic("Stated RSA length (4) doesn't agree with 4072 bit data")
-		}
-	default:
-		e := fmt.Sprintf("%d: Unacceptable encrypted data length", len(enckey))
-		panic(e)
-	}
+	copy(iv, randbytes(des.BlockSize))
+	// Overwrite the plainbyte inner with its 3DES encrypted version
+	copy(inner, encrypt_des_cbc(inner, deskey, iv))
 
+	// Create the buffer that will hold the entire header
 	buf := new(bytes.Buffer)
 	buf.Write(keyid) // Public Keyid
-	buf.WriteByte(rsalen) // Length of RSA data
-	buf.Write(enckey) // RSA data
-	copy(iv, randbytes(des.BlockSize))
-	buf.Write(iv) // 3DES IV
-	enc_inner_bytes := encrypt_des_cbc(inner_bytes, deskey, iv)
-	var padlen int // How many bytes of padding to apply
+	buf.WriteByte(uint8(rsalen)) // Length of RSA data
+	var rsadata []byte
 	if rsalen == 128 {
-		buf.Write(enc_inner_bytes)
-		padlen = 512 - buf.Len()
+		rsadata = rsa_encrypt(&pubkey.pk, deskey)
 	} else {
 		// This is an extended header and needs further work
 		/* Here follows the specification as I interpret it:-
@@ -115,28 +93,133 @@ func generate_header(inner_bytes []byte, pubkey pubinfo, rsalen uint8) []byte {
 				HMAC hash (Anti-tag)          [  32 bytes ]
 				HMAC hash (Body)              [  32 bytes ]
 				HMAC hash (328 Byte Enc Head) [  32 bytes ]
-				AES Key                       [  32 bytes ]
+				AES pre-key                   [  32 bytes ]
 		Initialization vector        [    8 bytes]
 		Encrypted header part        [  328 bytes]
 		Padding                      [    n bytes]
 		-----------------------------------------
 		Total                        [ 1024 bytes]
-		rsa = new(bytes.Buffer)
-		rsa.Write(deskey)
-		hmackey := randbytes(64)
-		mac := hmac.New(sha256.New, hmackey)
-		mac.Write("Next header block")
-		rsa.Write(mac.Sum(nil)) // HMAC Anti-tag
-		mac = hmac.New(sha256.New, hmackey)
 		*/
-		padlen = 1024 - buf.Len()
+		rsa := new(bytes.Buffer)
+		rsa.Write(deskey) // 3DES Key
+		hmackey := randbytes(64)
+		rsa.Write(hmackey) // HMAC Key
+		var mac hash.Hash
+		if len(headers) == 512 {
+			/* This is an odd usage case. If the exit header is only 512 Bytes, the
+			Anti-tag digest doesn't have sufficient material to work on.  To
+			overcome that, this pads it to 1024 Bytes with random data. */
+			headers = headers[0:len(headers) + 512]
+			copy(headers[512:], randbytes(512))
+		}
+
+		// Do AES foo
+		aes_pre_key := randbytes(32)
+		aes_body_key := derive_aes_keys("body-crypt", aes_pre_key, hmackey)
+		aes_inner_key := derive_aes_keys("tte-crypt", aes_pre_key, hmackey)
+		aes_iv := derive_aes_keys("aes-iv", aes_pre_key, hmackey)[:16]
+		// Combine encrypts in the order: inner, body, headers
+		copy(body, encrypt_aes_cfb(body, aes_body_key, aes_iv))
+		copy(inner, encrypt_aes_cfb(inner, aes_inner_key, aes_iv))
+
+		if len(headers) >= 1024 {
+			// Only AES encrypt existing headers if there actually are some
+			aes_header_key := derive_aes_keys("header-crypt", aes_pre_key, hmackey)
+			copy(headers, encrypt_aes_cfb(headers, aes_header_key, aes_iv))
+			// HMAC Anti-Tag
+			mac := hmac.New(sha256.New, hmackey)
+			mac.Write(headers[:1024])
+			rsa.Write(mac.Sum(nil)) // HMAC Anti-tag
+		} else {
+			// This is an Exit header so put garbage in the Anti-tag
+			fmt.Println("Doing fake anti-tag on Exit")
+			rsa.Write(randbytes(32)) // Fake HMAC Anti-tag
+		}
+
+		// HMAC Body
+		mac = hmac.New(sha256.New, hmackey)
+		mac.Write(body)
+		rsa.Write(mac.Sum(nil)) // HMAC Body
+
+		// HMAC Inner
+		mac = hmac.New(sha256.New, hmackey)
+		mac.Write(inner)
+		rsa.Write(mac.Sum(nil)) // HMAC Inner
+
+		rsa.Write(aes_pre_key) // AES pre-key
+		if rsa.Len() != 216 {
+			e := fmt.Sprintf("Expected 216 Bytes of RSA data.  Got %d Bytes", rsa.Len())
+			panic(e)
+		}
+
+		// Encrypt the RSA data
+		rsadata = rsa_encrypt(&pubkey.pk, rsa.Bytes())
 	}
+	buf.Write(rsadata)
+	buf.Write(iv) // 3DES IV
+	buf.Write(inner) // Inner header
 	// Pad the header to its defined length of 512 or 1024 Bytes
-	buf.Write(randbytes(padlen))
+	rsadatalen := len(rsadata)
+	if rsalen == 128 {
+		if rsadatalen != 128 {
+			e := fmt.Sprintf("Expected 128 Bytes of RSA data.  Got %d Bytes", rsadatalen)
+			panic(e)
+		}
+		if buf.Len() != 481 {
+			e := fmt.Sprintf("Expected 481 Bytes of header data.  Got %d Bytes", buf.Len())
+			panic(e)
+		}
+		buf.Write(randbytes(512 - buf.Len()))
+	} else {
+		switch rsalen {
+		case 2:
+			if rsadatalen != 256 {
+				e := fmt.Sprintf("Expected 256 Bytes of RSA data.  Got %d Bytes", rsadatalen)
+				panic(e)
+			}
+			if buf.Len() != 609 {
+				e := fmt.Sprintf("Expected 609 Bytes of header data.  Got %d Bytes", buf.Len())
+				panic(e)
+			}
+		case 3:
+			if rsadatalen != 384 {
+				e := fmt.Sprintf("Expected 384 Bytes of RSA data.  Got %d Bytes", rsadatalen)
+				panic(e)
+			}
+			if buf.Len() != 737 {
+				e := fmt.Sprintf("Expected 737 Bytes of header data.  Got %d Bytes", buf.Len())
+				panic(e)
+			}
+		case 4:
+			if rsadatalen != 512 {
+				e := fmt.Sprintf("Expected 512 Bytes of RSA data.  Got %d Bytes", rsadatalen)
+				panic(e)
+			}
+			if buf.Len() != 865 {
+				e := fmt.Sprintf("Expected 865 Bytes of header data.  Got %d Bytes", buf.Len())
+				panic(e)
+			}
+		default:
+			e:= fmt.Sprintf("RSA data of %d Bytes does not conform to specification", rsadatalen)
+			panic(e)
+		}
+		buf.Write(randbytes(1024 - buf.Len()))
+	}
 	if buf.Len() != 512 && buf.Len() != 1024 {
 		panic("Invalid header size")
 	}
 	return buf.Bytes()
+}
+
+// derive_aes_keys constructs an AES key using the hmac of a static string
+// combined with a pre-key.
+func derive_aes_keys(plain string, pre_key, hmackey []byte) []byte {
+	buf := new(bytes.Buffer)
+	buf.WriteString(plain)
+	buf.Write(pre_key)
+	mac := hmac.New(sha256.New, hmackey)
+	mac.Write(buf.Bytes())
+	return mac.Sum(nil)
 }
 
 // randbytes returns n Bytes of random data
@@ -194,6 +277,7 @@ func generate_final(msgid, packetid, body []byte) []byte {
 	buf.Write(msgid) // Message ID
 	iv := randbytes(des.BlockSize)
 	// Encrypt the body
+	fmt.Println("Pre DES in gen final:", hex.EncodeToString(body[:30]))
 	copy(body, encrypt_des_cbc(body, deskey, iv))
 	buf.Write(iv) // IV
 	buf.Write(timestamp()) // Timestamp
@@ -300,6 +384,18 @@ func encrypt_aes_cfb(plain, key, iv []byte) (encrypted []byte) {
   stream.XORKeyStream(encrypted, plain)
   return
 }
+
+func decrypt_aes_cfb(encrypted, key, iv []byte) (plain []byte) {
+	block, err := aes.NewCipher(key)
+  if err != nil {
+		panic(err)
+	}
+	plain = make([]byte, len(encrypted))
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(plain, encrypted)
+	return
+}
+
 
 // body_encode converts a plaintext message to Mixmaster's payload format
 func body_encode(plain []byte, cnum int) []byte {
@@ -443,6 +539,7 @@ func mixprep() {
 				got_exit = true
 			}
 			encmsg, sendto := mixmsg(message[first_byte:last_byte], msgid, packetid, chain, cnum, numc, pubring, xref)
+			fmt.Println("Post AES in mixprep:", hex.EncodeToString(encmsg[10240:10270]))
 			encmsg = cutmarks(encmsg)
 			if cfg.Mail.Sendmail {
 				sendmail(encmsg, sendto)
@@ -455,7 +552,7 @@ func mixprep() {
 }
 
 // keylen uses the encoded pubkey length to determine the header size and rsalen
-func keylen(l uint16) (headlen int, rsalen uint8) {
+func keylen(l uint16) (headlen, rsalen int) {
 	switch l {
 	case 1024:
 		headlen = 512
@@ -492,12 +589,12 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 	}
 	hop := popstr(&chain)
 	var headlen int // Length of header required to accomodate this key
-	var rsalen uint8 // RSA data length to write into header (128, 2, 3 or 4)
+	var rsalen int // RSA data length to write into header (128, 2, 3 or 4)
 	headlen, rsalen = keylen(pubring[hop].keylen)
 	// Initially create headers with sufficient length for the exit header
 	headers := make([]byte, headlen, 10240)
 	// Populate the top headlen Bytes of headers
-	copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
+	copy(headers[:headlen], generate_header(inner, headers, body, pubring[hop], rsalen))
 	/* Final hop processing is now complete.  What follows is iterative
 	intermediate hop processing. */
 	for {
@@ -515,13 +612,14 @@ func mixmsg(msg, msgid, packetid []byte, chain []string, cnum, numc int,
 		headers = headers[0:len(headers) + headlen]
 		copy(headers[headlen:], headers) // Move all the headers down by 512 bytes
 		// Write new header to first 512 Bytes
-		copy(headers[:headlen], generate_header(inner, pubring[hop], rsalen))
+		copy(headers[:headlen], generate_header(inner, headers, body, pubring[hop], rsalen))
 	}
 	// Record current header length before extending and padding
 	headlen_before_pad := len(headers)
 	headers = headers[0:10240]
 	copy(headers[headlen_before_pad:], randbytes(10240-headlen_before_pad))
 	payload = make([]byte, 20480)
+	fmt.Println("Post AES in mixmsg:", hex.EncodeToString(body[:30]))
 	copy(payload[:10240], headers)
 	copy(payload[10240:], body)
 	return
