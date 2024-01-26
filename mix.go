@@ -23,7 +23,7 @@ import (
 	"os"
 	"strings"
 	"strconv"
-	"code.google.com/p/gcfg"
+	"github.com/go-gcfg/gcfg"
 )
 
 const inner_header_bytes int = 328
